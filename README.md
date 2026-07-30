@@ -382,6 +382,7 @@ Where the spec left room, these choices were made and are recorded here per its 
 | Compute jobs exit `2` when their milestone has not landed | Distinguishes "not built" from "ran and found nothing" |
 | Static assets wired at M5, not M0 | `assets.directory` must exist for a deploy to validate; `dashboard/dist` does not exist yet |
 | Python 3.11 in CI; 3.13 works locally | Spec pins 3.11; `requires-python = ">=3.11"` keeps both viable |
+| `@napi-rs/wasm-runtime` pinned to 1.1.6 via `overrides` | 1.2.0 peers on an `@emnapi/core` alpha that npm does not resolve, so `npm ci` rejected the lockfile on Linux while passing on macOS. Affects only rolldown's wasm32-wasi fallback, which no target platform uses |
 
 ---
 

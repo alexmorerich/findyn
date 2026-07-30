@@ -20,6 +20,12 @@
   "dependencies": {
     "hono": "^4.6.14"
   },
+  "overrideRationale": {
+    "@napi-rs/wasm-runtime": "1.2.0 peers on @emnapi/core@^2.0.0-alpha.3 but npm resolves 1.11.x, so `npm ci` rejects the lockfile on Linux. 1.1.6 peers on ^1.7.1, which is satisfied. Only affects rolldown's wasm32-wasi fallback binding, which neither CI nor local dev uses."
+  },
+  "overrides": {
+    "@napi-rs/wasm-runtime": "1.1.6"
+  },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.19.0",
     "@types/node": "^22.10.5",
