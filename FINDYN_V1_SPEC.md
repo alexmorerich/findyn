@@ -1,5 +1,7 @@
 # FinDyn v1.0 — S&P500 Dynamic State Engine
 
+> **Re-scoped:** this spec now governs `findynamics/engines/equity`; see `docs/redesign/`.
+
 **Final Build Specification (for Coder Agent)**
 Status: APPROVED · Version: 1.0 · Parent system: FinOS / FinDyn
 
