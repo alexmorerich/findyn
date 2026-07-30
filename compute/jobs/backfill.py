@@ -14,23 +14,41 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from collections.abc import Iterator
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from findynamics.core.config import SeriesSpec, get_series_config
 from findynamics.data.providers import build_provider
 from findynamics.data.providers.base import Provider, ProviderError
 from findynamics.data.providers.registry import KEYLESS_PROVIDERS
 from findynamics.data.quality import DataQualityReport, QualityPolicy, check_series
+from findynamics.data.vintages import repair_pre_archive_releases
 from jobs._common import base_parser, configure_logging, write_back
 
 log = logging.getLogger("findynamics.jobs.backfill")
+
+#: Observations per write-back request. The serving plane upserts in D1 batches
+#: of 900, so this is a handful of batches per request — well inside a Worker's
+#: CPU budget, and small enough that a retry is cheap.
+DEFAULT_BATCH_SIZE = 5000
 
 
 def parse_date(value: str | None) -> date | None:
     if not value:
         return None
     return datetime.strptime(value, "%Y-%m-%d").date()
+
+
+def configured_series(provider_id: str) -> list[str]:
+    """Every series in series.yaml served by ``provider_id``, factors and engines alike.
+
+    Deduplicated and sorted: a series can appear under both a factor and an
+    engine (DGS10 does), and fetching it twice would just burn quota.
+    """
+    config = get_series_config()
+    return sorted({spec.id for spec in config.all_series() if spec.provider == provider_id})
 
 
 def ingest_series(
@@ -40,14 +58,24 @@ def ingest_series(
     start: date | None,
     end: date | None,
     policy: QualityPolicy | None = None,
+    spec: SeriesSpec | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], DataQualityReport]:
-    """Fetch and validate one series.
+    """Fetch, repair release dates, validate.
 
     Returns (metadata wire dict, observation wire dicts, quality report).
+
+    The repair happens before the quality check and before the write-back, so
+    what lands in D1 is what a point-in-time query needs. Doing it on the read
+    side instead would leave the stored table quietly wrong.
     """
     result = provider.fetch(series_id, start=start, end=end)
-    report = check_series(result.metadata, result.observations, policy=policy)
-    return result.metadata.to_wire(), [o.to_wire() for o in result.observations], report
+    observations = (
+        repair_pre_archive_releases(result.observations, spec)
+        if spec is not None
+        else result.observations
+    )
+    report = check_series(result.metadata, observations, policy=policy)
+    return result.metadata.to_wire(), [o.to_wire() for o in observations], report
 
 
 def run(
@@ -60,15 +88,25 @@ def run(
     force: bool,
     cache_dir: Path | None,
     out: Path | None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> int:
     provider = build_provider(provider_id, cache_dir=cache_dir)
-    targets = series_ids or provider.available_series()
+    # Config first, catalogue second. FRED hosts 800k series and exposes no
+    # catalogue, so "everything this provider serves us" is a question only
+    # series.yaml can answer — and answering it there is what lets a new engine's
+    # series be backfilled by editing yaml rather than this file.
+    targets = series_ids or configured_series(provider_id) or provider.available_series()
     if not targets:
         log.error(
-            "%s exposes no default catalogue; name the series explicitly with --series",
+            "%s has no series in series.yaml and exposes no default catalogue; "
+            "name them explicitly with --series",
             provider_id,
         )
         return 2
+
+    # The spec carries the publication lag, which is what a release date is
+    # synthesized from where the vintage archive cannot speak (data/vintages.py).
+    specs = {spec.id: spec for spec in get_series_config().all_series()}
 
     metadata: list[dict[str, Any]] = []
     observations: list[dict[str, Any]] = []
@@ -79,7 +117,9 @@ def run(
 
     for series_id in targets:
         try:
-            meta, rows, report = ingest_series(provider, series_id, start=start, end=end)
+            meta, rows, report = ingest_series(
+                provider, series_id, start=start, end=end, spec=specs.get(series_id)
+            )
         except ProviderError as err:
             failed += 1
             log.error("%s: %s", series_id, err)
@@ -148,10 +188,45 @@ def run(
         out.write_text(json.dumps(payload, indent=2))
         log.info("wrote payload to %s (%d bytes)", out, out.stat().st_size)
 
-    write_back(payload, dry_run=dry_run)
+    for chunk in chunk_payload(payload, batch_size):
+        write_back(chunk, dry_run=dry_run)
 
     # Retrieving nothing usable is a failure; partial success is not.
     return 1 if (failed and not metadata) else 0
+
+
+def chunk_payload(payload: dict[str, Any], batch_size: int) -> Iterator[dict[str, Any]]:
+    """Split a backfill into requests the serving plane can actually absorb.
+
+    A full historical backfill is hundreds of thousands of observations. Sent as
+    one request that is tens of megabytes and hundreds of D1 batches, and the
+    Worker runs out of CPU somewhere in the middle — leaving a partial write
+    with no record of where it stopped.
+
+    Chunking by observations keeps each request bounded. Metadata, quality and
+    ingestion rows ride along with the first chunk: they are per-series, not
+    per-observation, so they are small and repeating them would just re-upsert.
+    Every chunk is independently idempotent, so a failure costs one chunk and a
+    re-run fixes it.
+    """
+    observations = payload.get("observations") or []
+    head = {k: v for k, v in payload.items() if k != "observations"}
+
+    if not observations:
+        yield payload
+        return
+
+    for start in range(0, len(observations), batch_size):
+        chunk = (
+            dict(head)
+            if start == 0
+            else {
+                "model_version": payload.get("model_version"),
+                "generated_at": payload.get("generated_at"),
+            }
+        )
+        chunk["observations"] = observations[start : start + batch_size]
+        yield chunk
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -165,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
         "--series",
         nargs="*",
         default=[],
-        help="series ids; defaults to the provider's whole catalogue",
+        help="series ids; defaults to every series series.yaml maps to this provider",
     )
     parser.add_argument("--start", help="earliest observation date, YYYY-MM-DD")
     parser.add_argument("--end", help="latest observation date, YYYY-MM-DD")
@@ -176,6 +251,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--cache-dir", default=".cache", help="on-disk response cache")
     parser.add_argument("--out", help="also write the write-back payload to this file")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=DEFAULT_BATCH_SIZE,
+        help="observations per write-back request",
+    )
 
     args = parser.parse_args(argv)
     configure_logging(args.verbose)
@@ -189,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
         force=args.force,
         cache_dir=Path(args.cache_dir) if args.cache_dir else None,
         out=Path(args.out) if args.out else None,
+        batch_size=args.batch_size,
     )
 
 

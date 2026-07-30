@@ -33,6 +33,14 @@ BASE_URL = "https://api.stlouisfed.org/fred"
 REALTIME_START = "1776-07-04"
 REALTIME_END = "9999-12-31"
 
+#: FRED rejects an observations request whose real-time window spans more than
+#: this many vintage dates. The daily Treasury series blow straight through it —
+#: DGS10 has over 5000 — so the window is split into chunks that each stay under.
+MAX_VINTAGE_DATES = 2000
+
+#: Page size for the vintagedates endpoint (its documented maximum).
+VINTAGE_PAGE = 10000
+
 _FREQUENCY = {
     "D": "daily",
     "W": "weekly",
@@ -44,6 +52,29 @@ _FREQUENCY = {
 }
 
 PREFIX = "FRED:"
+
+
+def _dedupe_vintages(
+    parsed: list[tuple[date, date, float]],
+) -> list[tuple[date, date, float]]:
+    """Collapse repeated issues of an unchanged figure.
+
+    Keeps the first issue and every issue that actually moved the number. A
+    "revision" that reprints the same value carries no information and, left in,
+    would make the vintage count grow with how the fetch happened to be split.
+    """
+    by_period: dict[date, list[tuple[date, float]]] = {}
+    for obs_date, issued, value in parsed:
+        by_period.setdefault(obs_date, []).append((issued, value))
+
+    out: list[tuple[date, date, float]] = []
+    for obs_date, issues in by_period.items():
+        previous: float | None = None
+        for issued, value in sorted(set(issues)):
+            if previous is None or value != previous:
+                out.append((obs_date, issued, value))
+                previous = value
+    return out
 
 
 class FredProvider(Provider):
@@ -123,6 +154,61 @@ class FredProvider(Provider):
             notes=(str(entry.get("notes")) or None) if entry.get("notes") else None,
         )
 
+    def vintage_dates(self, series_id: str) -> list[date]:
+        """Every date on which this series was issued or reissued.
+
+        Needed before the observations call, because the size of the real-time
+        window is what FRED rejects on — and it will not tell us how wide a
+        window is safe without being asked.
+        """
+        collected: list[date] = []
+        offset = 0
+        while True:
+            payload = self._get(
+                "series/vintagedates",
+                {
+                    "series_id": self._bare(series_id),
+                    "realtime_start": REALTIME_START,
+                    "realtime_end": REALTIME_END,
+                    "limit": str(VINTAGE_PAGE),
+                    "offset": str(offset),
+                },
+            )
+            page = payload.get("vintage_dates") or []
+            for raw in page:
+                try:
+                    collected.append(datetime.strptime(str(raw), "%Y-%m-%d").date())
+                except ValueError:
+                    continue
+            if len(page) < VINTAGE_PAGE:
+                break
+            offset += VINTAGE_PAGE
+        return sorted(set(collected))
+
+    @staticmethod
+    def _vintage_windows(vintages: list[date]) -> list[tuple[str, str]]:
+        """Real-time windows that each cover at most :data:`MAX_VINTAGE_DATES`.
+
+        Boundaries are actual vintage dates rather than a calendar split, so no
+        window can accidentally contain more vintages than intended however
+        unevenly a series was revised.
+
+        Windows overlap at their endpoints by one vintage. That is harmless:
+        merging is by (period, issue date), so a duplicated row collapses.
+        """
+        if not vintages:
+            return [(REALTIME_START, REALTIME_END)]
+        if len(vintages) <= MAX_VINTAGE_DATES:
+            return [(REALTIME_START, REALTIME_END)]
+
+        windows: list[tuple[str, str]] = []
+        for i in range(0, len(vintages), MAX_VINTAGE_DATES):
+            chunk = vintages[i : i + MAX_VINTAGE_DATES]
+            first = REALTIME_START if i == 0 else chunk[0].isoformat()
+            last = REALTIME_END if i + MAX_VINTAGE_DATES >= len(vintages) else chunk[-1].isoformat()
+            windows.append((first, last))
+        return windows
+
     def fetch_observations(
         self,
         series_id: str,
@@ -132,40 +218,40 @@ class FredProvider(Provider):
     ) -> list[Observation]:
         metadata = self.fetch_metadata(series_id)
 
-        params: dict[str, str] = {"series_id": self._bare(series_id)}
-        if self.use_vintages:
-            params["realtime_start"] = REALTIME_START
-            params["realtime_end"] = REALTIME_END
+        base: dict[str, str] = {"series_id": self._bare(series_id)}
         if start is not None:
-            params["observation_start"] = start.isoformat()
+            base["observation_start"] = start.isoformat()
         if end is not None:
-            params["observation_end"] = end.isoformat()
+            base["observation_end"] = end.isoformat()
 
-        payload = self._get("series/observations", params)
-        rows = payload.get("observations")
-        if rows is None:
-            raise ParseError(self.id, f"{series_id}: response has no observations array")
+        windows: list[tuple[str, str] | None]
+        if self.use_vintages:
+            windows = list(self._vintage_windows(self.vintage_dates(series_id)))
+            if len(windows) > 1:
+                log.info("%s: %d vintage windows", series_id, len(windows))
+        else:
+            windows = [None]
 
         parsed: list[tuple[date, date, float]] = []
-        for row in rows:
-            raw_value = row.get("value")
-            # FRED encodes "no data for this period" as a single period.
-            if raw_value in (None, ".", ""):
-                continue
-            try:
-                obs_date = datetime.strptime(row["date"], "%Y-%m-%d").date()
-                issued = datetime.strptime(
-                    row.get("realtime_start") or row["date"], "%Y-%m-%d"
-                ).date()
-                value = float(raw_value)
-            except (KeyError, ValueError):
-                continue
-            # A vintage stamp earlier than the period itself is a source quirk,
-            # not a genuine early publication; clamp so the invariant holds.
-            parsed.append((obs_date, max(issued, obs_date), value))
+        for window in windows:
+            params = dict(base)
+            if window is not None:
+                params["realtime_start"], params["realtime_end"] = window
+            payload = self._get("series/observations", params)
+            rows = payload.get("observations")
+            if rows is None:
+                raise ParseError(self.id, f"{series_id}: response has no observations array")
+            parsed.extend(self._parse_rows(rows))
+
+        # Splitting the window clamps each chunk's realtime_start to the chunk
+        # boundary, so an unchanged figure reappears looking like a fresh issue.
+        # Deduplicating on (period, issue) and then dropping repeats of the same
+        # value keeps only the issues that actually changed something.
+        parsed = _dedupe_vintages(parsed)
 
         # First issue per period is the release date; each row keeps its own
-        # issue date as the revision date.
+        # issue date as the revision date. Taking the minimum across all windows
+        # is what makes the chunked fetch equivalent to one unsplit request.
         first_issue: dict[date, date] = {}
         for obs_date, issued, _ in parsed:
             if obs_date not in first_issue or issued < first_issue[obs_date]:
@@ -186,3 +272,23 @@ class FredProvider(Provider):
         ]
         observations.sort(key=lambda o: (o.observation_date, o.revision_date or o.release_date))
         return observations
+
+    def _parse_rows(self, rows: list[dict]) -> list[tuple[date, date, float]]:
+        parsed: list[tuple[date, date, float]] = []
+        for row in rows:
+            raw_value = row.get("value")
+            # FRED encodes "no data for this period" as a single period.
+            if raw_value in (None, ".", ""):
+                continue
+            try:
+                obs_date = datetime.strptime(row["date"], "%Y-%m-%d").date()
+                issued = datetime.strptime(
+                    row.get("realtime_start") or row["date"], "%Y-%m-%d"
+                ).date()
+                value = float(raw_value)
+            except (KeyError, ValueError):
+                continue
+            # A vintage stamp earlier than the period itself is a source quirk,
+            # not a genuine early publication; clamp so the invariant holds.
+            parsed.append((obs_date, max(issued, obs_date), value))
+        return parsed

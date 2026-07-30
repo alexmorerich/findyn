@@ -1,2 +1,91 @@
-# FinRates — interest-rate dynamics (Phase 1). Not built yet.
-enabled: false
+# FinRates — interest-rate dynamics.
+#
+# Phase 1 (this file): Nelson-Siegel level/slope/curvature + rule-based rate
+# regimes. Phase 2 is the Kalman state space, Phase 3 Vasicek/CIR/Hull-White
+# (01-target-architecture.md §5). Nothing here is a rate forecast: the engine
+# publishes states, scores and signals.
+#
+# Every threshold the model branches on lives in this file. A rule that only
+# exists in Python is a rule nobody can recalibrate without a deploy.
+enabled: true
+
+# Maturity in years for each configured curve series. curve.py fits whichever of
+# these are present on a given day, so a holiday quote gap or DGS1MO's 2001 start
+# shrinks the cross-section rather than dropping the date.
+tenors:
+  "FRED:DGS1MO": 0.08333
+  "FRED:DGS3MO": 0.25
+  "FRED:DGS6MO": 0.5
+  "FRED:DGS1": 1.0
+  "FRED:DGS2": 2.0
+  "FRED:DGS3": 3.0
+  "FRED:DGS5": 5.0
+  "FRED:DGS7": 7.0
+  "FRED:DGS10": 10.0
+  "FRED:DGS20": 20.0
+  "FRED:DGS30": 30.0
+
+# The 10y breakeven, kept out of `tenors` because it is not a point on the
+# nominal curve — it is the inflation compensation subtracted to get real rates.
+breakeven_series: "FRED:T10YIE"
+
+nelson_siegel:
+  # Below five points the three betas are barely identified and the fit starts
+  # interpolating noise, so a thinner day is skipped rather than published.
+  min_tenors: 5
+  # lambda fixes where the slope and curvature loadings peak. It is selected once
+  # by monthly_refit over this grid (lowest in-sample RMSE across the training
+  # window) and then frozen — refitting it daily would make level/slope/curvature
+  # incomparable from one day to the next, which is the whole point of the factors.
+  lambda_grid: [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.5]
+  # Used until the first monthly_refit writes a fitted value. 0.609 is the
+  # Diebold-Li convention (curvature loading peaks at 30 months).
+  lambda_default: 0.609
+  # An RMSE this large (percentage points) means the curve is not
+  # Nelson-Siegel-shaped that day; confidence goes to zero there.
+  rmse_confidence_floor: 0.35
+
+regime:
+  # The rule reads the fitted curve's 10y-3m spread rather than the raw quotes:
+  # reading it off the fit means one missing tenor cannot flip the regime, and
+  # this is the spread the inversion literature is written about. The NS slope
+  # factor (-beta1, a 30y-vs-instantaneous read) is still published as an output.
+  spread_short_years: 0.25
+  spread_long_years: 10.0
+  # Below this the curve is inverted. Zero, with no buffer: an inversion is
+  # defined by its sign, and a buffer would just move the date it is called.
+  inverted_below: 0.0
+  # |spread| under this is flat rather than meaningfully sloped.
+  flat_below: 0.5
+  # Re-steepening: out of inversion, but only while the exit is still recent and
+  # the spread is actually rising. Both conditions matter — a curve that has been
+  # positively sloped for two years is not "re-steepening".
+  re_steepening_lookback_days: 365
+  re_steepening_min_delta: 0.25
+  # Window for the trend transforms (spread delta, level delta). Trading days.
+  trend_days: 252
+
+expected_return:
+  # Horizon of the carry + rolldown estimate, in years.
+  horizon_years: 1.0
+  # Constant-maturity position the estimate describes.
+  position_years: 10.0
+
+risk:
+  # Duration x rate volatility, in annualized percentage points of return vol,
+  # that maps to a risk score of 100. 12% is roughly a 10y position through 2022.
+  vol_reference_pct: 12.0
+  # Trailing window for the level-factor volatility estimate, in observations.
+  vol_window_days: 252
+  # Observations per year, for annualizing that volatility. Stated rather than
+  # assumed: the engine reads whatever cadence its series arrive at, and scaling
+  # month-end data by sqrt(252) would overstate the result by about 4.6x.
+  vol_periods_per_year: 252
+  # Used when history is too short to estimate volatility: annualized standard
+  # deviation of daily level changes, in percentage points.
+  vol_fallback_pct: 0.9
+
+outputs:
+  # How far back predict() republishes the per-date NS factors and regime codes.
+  # Upserts are idempotent, so a longer window costs write time, never accuracy.
+  history_days: 1825

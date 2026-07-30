@@ -17,7 +17,7 @@ from datetime import date, datetime
 
 import pandas as pd
 
-from findynamics.data.pit import pit_join
+from findynamics.data.pit import pit_history, pit_join
 
 
 class PandasPITAccessor:
@@ -50,6 +50,29 @@ class PandasPITAccessor:
             return None
         value = float(frame.at[series_id, "value"])
         return value if math.isfinite(value) else None
+
+    def history(
+        self,
+        series_ids: Iterable[str] | None = None,
+        *,
+        start: str | date | datetime | pd.Timestamp | None = None,
+    ) -> pd.DataFrame:
+        """Whole knowable history as of :attr:`as_of` (long format)."""
+        return pit_history(self._observations, self._as_of, series_ids=series_ids, start=start)
+
+    def wide(
+        self,
+        series_ids: Iterable[str] | None = None,
+        *,
+        start: str | date | datetime | pd.Timestamp | None = None,
+    ) -> pd.DataFrame:
+        """:meth:`history` pivoted: index ``obs_date``, one column per series."""
+        long = self.history(series_ids, start=start)
+        if long.empty:
+            return pd.DataFrame(index=pd.DatetimeIndex([], name="obs_date"))
+        # Duplicates are impossible here — pit_history returns one row per
+        # (series, period) — so pivot rather than a silently-aggregating pivot_table.
+        return long.pivot(index="obs_date", columns="series_id", values="value").sort_index()
 
     def __repr__(self) -> str:
         return f"PandasPITAccessor(as_of={self._as_of.isoformat()}, rows={len(self._observations)})"

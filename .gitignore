@@ -3,6 +3,7 @@ node_modules/
 dist/
 .wrangler/
 .dev.vars
+.env
 *.log
 
 # Python

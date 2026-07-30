@@ -12,7 +12,12 @@ from findynamics.core.contracts import vocab
 from findynamics.factors.definitions import FACTORS, factor_series_ids, factor_specs
 
 
-def test_the_initial_factor_set_is_the_nine_v1_forces():
+def test_the_factor_set_is_the_nine_v1_forces_plus_the_p1_additions():
+    """The nine keep their order; P1 appends rather than reshuffling.
+
+    Order is load-bearing — serving mirrors this tuple as FORCES and the drift
+    test compares them element by element.
+    """
     assert FACTORS == (
         "valuation",
         "earnings",
@@ -23,6 +28,8 @@ def test_the_initial_factor_set_is_the_nine_v1_forces():
         "labor",
         "risk_appetite",
         "sentiment",
+        "real_rate",
+        "usd_strength",
     )
 
 

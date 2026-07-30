@@ -831,6 +831,203 @@ button:hover {
   gap: 0.3rem 1rem;
 }
 
+/* --------------------------------------------------------- engine cards */
+
+/* Auto-fit rather than a fixed column count: the grid absorbs new engines as
+   they ship without anyone revisiting this file. */
+.enginegrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: var(--gap);
+}
+
+.enginecard {
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 0.85rem 0.95rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.enginecard--ok {
+  border-left-color: var(--ok);
+}
+.enginecard--warn {
+  border-left-color: var(--warn);
+}
+.enginecard--bad {
+  border-left-color: var(--bad);
+}
+.enginecard--info {
+  border-left-color: var(--info);
+}
+.enginecard--idle {
+  border-left-color: var(--border-strong);
+  opacity: 0.75;
+}
+
+.enginecard__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.enginecard__title {
+  font-weight: 600;
+  font-size: 1.02rem;
+  color: var(--fg);
+}
+a.enginecard__title {
+  color: var(--accent);
+}
+.enginecard__blurb {
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  margin: 0;
+}
+.enginecard__detail {
+  font-size: 0.78rem;
+  color: var(--fg-faint);
+  margin: 0;
+}
+.enginecard__stats {
+  display: flex;
+  gap: 1.1rem;
+  flex-wrap: wrap;
+  margin: 0;
+}
+.enginecard__stats dt {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-faint);
+}
+.enginecard__stats dd {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--fg);
+}
+
+/* ---------------------------------------------------------------- rates */
+
+.chart--spark {
+  height: 120px;
+}
+/* Ghost curves must read as context, not as a second claim. */
+.chart .line--ghost {
+  stroke: var(--fg-faint);
+  stroke-width: 1.1;
+  stroke-dasharray: 4 3;
+  opacity: 0.75;
+}
+.chart .point {
+  fill: var(--accent);
+  stroke: var(--bg-sunken);
+  stroke-width: 1;
+}
+
+.factorrow + .factorrow {
+  margin-top: 1.1rem;
+}
+.factorrow__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.4rem;
+}
+.factorrow__title {
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+.regimestrip {
+  display: flex;
+  width: 100%;
+  height: 2.1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-sunken);
+}
+.regimestrip__run {
+  display: block;
+  min-width: 1px;
+}
+.regimestrip__run--ok {
+  background: var(--ok);
+}
+.regimestrip__run--warn {
+  background: var(--warn);
+}
+.regimestrip__run--bad {
+  background: var(--bad);
+}
+.regimestrip__run--info {
+  background: var(--info);
+}
+.regimestrip__run--idle {
+  background: var(--border-strong);
+}
+
+.legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.legend__swatch {
+  width: 0.85rem;
+  height: 0.6rem;
+  border-radius: 2px;
+  display: inline-block;
+  background: var(--border-strong);
+}
+.legend__swatch--ok {
+  background: var(--ok);
+}
+.legend__swatch--warn {
+  background: var(--warn);
+}
+.legend__swatch--bad {
+  background: var(--bad);
+}
+.legend__swatch--info {
+  background: var(--info);
+}
+.legend__swatch--idle {
+  background: var(--border-strong);
+}
+.legend__swatch--accent {
+  background: var(--accent);
+}
+.legend__swatch--ghost {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--fg-faint) 0 4px,
+    transparent 4px 7px
+  );
+}
+
+.explain {
+  margin-top: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+  padding: 0.6rem 0.8rem;
+}
+.explain summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.88rem;
+}
+.explain .deflist {
+  margin-top: 0.6rem;
+}
+
 /* ------------------------------------------------------------ responsive */
 
 @media (max-width: 40rem) {

@@ -1,0 +1,75 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="FinRates"
+  description="Nelson-Siegel yield-curve factors, rate regimes and curve signals from the FinDynamics rates engine."
+  eyebrow="Asset engine"
+  heading="FinRates — interest-rate dynamics"
+  intro="The US Treasury curve reduced to three Nelson-Siegel factors and a rate regime. Nothing here forecasts rates: the engine publishes states, scores and signals. Everything on this page is read from the live API by your browser."
+>
+  <section class="panel" aria-labelledby="state-h">
+    <div class="panel__head">
+      <h2 id="state-h">Current state</h2>
+      <span class="panel__note">/api/v1/assets/rates/state</span>
+    </div>
+    <div id="rates-state"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="curve-h">
+    <div class="panel__head">
+      <h2 id="curve-h">Fitted yield curve</h2>
+      <span class="panel__note">Nelson-Siegel, reconstructed from the published factors</span>
+    </div>
+    <p class="prose">
+      Today&rsquo;s fitted curve, with ghost curves from a month and a year ago drawn from the same
+      model&rsquo;s published factors. The horizontal axis is square-root maturity, because on a
+      linear axis the first two years &mdash; where the curve actually bends &mdash; occupy a
+      seventh of the width.
+    </p>
+    <div id="rates-curve" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="factors-h">
+    <div class="panel__head">
+      <h2 id="factors-h">Factor history</h2>
+      <span class="panel__note">/api/v1/assets/rates/history?metric=ns_*</span>
+    </div>
+    <p class="prose">
+      Level, slope and curvature over time. Each date is an independent cross-sectional fit at a
+      frozen lambda &mdash; no smoothing across dates, so any point is what a run standing on that
+      date would have produced.
+    </p>
+    <div id="rates-factors" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="regime-h">
+    <div class="panel__head">
+      <h2 id="regime-h">Regime timeline</h2>
+      <span class="panel__note">/api/v1/assets/rates/history?metric=regime_code</span>
+    </div>
+    <p class="prose">
+      Rule-based regimes over the published window. Each date is classified from its own trailing
+      window, so this is the sequence of calls a daily run would have made &mdash; not a
+      relabelling of history with today&rsquo;s knowledge.
+    </p>
+    <div id="rates-regime" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="signals-h">
+    <div class="panel__head">
+      <h2 id="signals-h">Signals</h2>
+      <span class="panel__note">AssetState.signals</span>
+    </div>
+    <p class="prose">
+      Direction is the signal&rsquo;s read on risk conditions, not on the direction of the number
+      itself: rising rates count as adverse even though the value went up.
+    </p>
+    <div id="rates-signals" style="margin-top:0.85rem"></div>
+  </section>
+</Base>
+
+<script>
+  import '../scripts/rates';
+</script>

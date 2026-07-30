@@ -1,11 +1,32 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { Env } from '../types';
-import { envelope, notImplemented } from '../lib/responses';
+import { envelope, isStale, notImplemented } from '../lib/responses';
 import { getHealth } from './health';
 import { getObservations, getSeriesMetadata, listSeries } from './series';
 import { InvalidDateError, pitSnapshot } from './pit';
-import { FORCES, HORIZONS, REGIMES } from '../domain';
+import {
+  UnknownAssetError,
+  assertKnownAsset,
+  getAssetState,
+  getHistory,
+  listAssets,
+  listMetrics,
+} from './assets';
+import { ASSETS, FORCES, HORIZONS, RATE_REGIMES, REGIMES } from '../domain';
+
+/**
+ * Which phase delivers each engine, for the 501 an unpublished engine returns.
+ * Kept beside the route rather than in domain.ts: it is a roadmap fact, not
+ * vocabulary the compute plane has to agree with.
+ */
+const ENGINE_PHASE: Record<string, string> = {
+  rates: 'P1',
+  money: 'P2',
+  equity: 'P3',
+  gold: 'P4',
+  crypto: 'P5',
+};
 
 /**
  * Public read-only API — FINDYN_V1_SPEC.md §13.
@@ -26,7 +47,13 @@ api.get('/meta', (c) =>
       spec: 'FINDYN_V1_SPEC.md',
       env: c.env.FINDYN_ENV,
       info_set: c.env.INFO_SET,
-      vocabulary: { forces: FORCES, regimes: REGIMES, horizons: HORIZONS },
+      vocabulary: {
+        forces: FORCES,
+        regimes: REGIMES,
+        horizons: HORIZONS,
+        assets: ASSETS,
+        rate_regimes: RATE_REGIMES,
+      },
     }),
   ),
 );
@@ -75,6 +102,105 @@ api.get('/pit', async (c) => {
     }
     throw err;
   }
+});
+
+// ---------------------------------------------------------------------------
+// Multi-asset engine surface (01-target-architecture.md §7)
+// ---------------------------------------------------------------------------
+
+/**
+ * The registry, not the data: every engine in the vocabulary appears, with
+ * `status: 'awaiting_first_run'` until one has published. The dashboard's
+ * Engines panel is driven entirely by this, so a new engine shows up on the
+ * home page the first time it writes back — no template change.
+ */
+api.get('/assets', async (c) => {
+  const assets = await listAssets(c.env);
+  const newest = assets.reduce<string | null>(
+    (max, a) => (a.as_of && (max === null || a.as_of > max) ? a.as_of : max),
+    null,
+  );
+  return c.json(
+    envelope(
+      { count: assets.length, assets },
+      { as_of: newest, stale: assets.every((a) => a.stale) },
+    ),
+  );
+});
+
+api.get('/assets/:asset/state', async (c) => {
+  const asset = c.req.param('asset');
+  try {
+    assertKnownAsset(asset);
+  } catch (err) {
+    if (err instanceof UnknownAssetError) {
+      return c.json({ error: 'not_found', message: err.message }, 404);
+    }
+    throw err;
+  }
+
+  const state = await getAssetState(c.env, asset);
+  if (!state) {
+    // Registered but silent. 501 with the phase tag is the existing convention
+    // for "reserved, not delivered", and it is the honest answer here too: the
+    // consumer can tell this apart from an engine that ran and found nothing.
+    return c.json(
+      {
+        error: 'not_implemented',
+        message: `The ${asset} engine has not published a state yet.`,
+        milestone: ENGINE_PHASE[asset] ?? 'P6',
+        asset,
+      },
+      501,
+    );
+  }
+
+  return c.json(
+    envelope(state, {
+      as_of: state.as_of,
+      model_version: state.model_version,
+      stale: isStale(state.as_of),
+    }),
+  );
+});
+
+api.get('/assets/:asset/history', async (c) => {
+  const asset = c.req.param('asset');
+  try {
+    assertKnownAsset(asset);
+  } catch (err) {
+    if (err instanceof UnknownAssetError) {
+      return c.json({ error: 'not_found', message: err.message }, 404);
+    }
+    throw err;
+  }
+
+  const metric = c.req.query('metric');
+  if (!metric) {
+    const available = await listMetrics(c.env, asset);
+    return c.json(
+      {
+        error: 'bad_request',
+        message: 'metric= is required',
+        available,
+      },
+      400,
+    );
+  }
+
+  const points = await getHistory(c.env, asset, metric, {
+    from: c.req.query('from'),
+    to: c.req.query('to'),
+    limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined,
+  });
+  const newest = points.at(-1)?.as_of ?? null;
+
+  return c.json(
+    envelope(
+      { asset, metric, count: points.length, points },
+      { as_of: newest, stale: isStale(newest) },
+    ),
+  );
 });
 
 // M2 — kinematic state K(t) + force state F(t) snapshot

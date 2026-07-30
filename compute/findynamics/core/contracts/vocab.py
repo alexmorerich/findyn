@@ -19,6 +19,12 @@ ASSETS: Final[tuple[str, ...]] = ("money", "rates", "equity", "gold", "crypto")
 #: §2.2 — the shared risk factors (v1 called them "forces"). Layer 0: computed
 #: once per run and handed to every engine through ``WorldState``.
 #: Re-exported by :mod:`findynamics.factors.definitions` as the initial factor set.
+#:
+#: Every score runs on one axis: 100 is maximally risk-supportive, 0 maximally
+#: hostile. That is why ``real_rate`` scores high when real rates are *low* and
+#: ``usd_strength`` scores high when the dollar is *weak* — the name says which
+#: variable is being read, the axis says what the number means. Consumers that
+#: want the level rather than the reading take it from ``components``.
 FACTORS: Final[tuple[str, ...]] = (
     "valuation",
     "earnings",
@@ -29,6 +35,10 @@ FACTORS: Final[tuple[str, ...]] = (
     "labor",
     "risk_appetite",
     "sentiment",
+    # P1 additions (03-contracts.md §4): inputs the rates, gold and crypto
+    # engines share, promoted to Layer 0 rather than recomputed per engine.
+    "real_rate",
+    "usd_strength",
 )
 
 #: §10 — forecast horizons.

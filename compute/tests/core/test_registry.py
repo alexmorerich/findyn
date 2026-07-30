@@ -32,9 +32,15 @@ from findynamics.core.registry import (
 
 @pytest.fixture(autouse=True)
 def isolated_registries():
-    """Registries are module-level; snapshot and restore so tests cannot leak."""
+    """Registries are module-level; empty them for the test and restore after.
+
+    Emptying matters as much as restoring: real engines register themselves at
+    import time, so a test asserting on registry contents would otherwise depend
+    on which other test module happened to run first.
+    """
     engines = dict(registry.ENGINES)
     providers = dict(registry.PROVIDERS)
+    registry.ENGINES.clear()
     yield
     registry.ENGINES.clear()
     registry.ENGINES.update(engines)
@@ -188,9 +194,43 @@ def test_engine_enabled_without_an_implementation_is_an_error():
         enabled_engines(config_with(rates=True))
 
 
-def test_nothing_is_registered_in_p0():
-    """P0 ships contracts, not models. A registered engine here means scope creep."""
-    assert registry.ENGINES == {}
+def test_load_engines_reports_what_config_enabled():
+    """The job layer names no engine; it asks config and gets packages imported."""
+    from findynamics.engines import load_engines
+
+    # Idempotent by design — several jobs call it in one process.
+    assert load_engines() == load_engines() == ("rates",)
+
+
+def test_importing_an_engine_package_is_what_registers_it():
+    """Discovery is by name; the import *is* the registration (03-contracts.md §3).
+
+    Run in a fresh interpreter: registration happens at import time, and this
+    process imported the engines long ago. Clearing the table and re-importing
+    would prove nothing, because the module cache makes the second import a
+    no-op.
+    """
+    import subprocess
+    import sys
+
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from findynamics.core.registry import ENGINES;"
+            "assert ENGINES == {}, ENGINES;"
+            "from findynamics.engines import load_engines;"
+            "load_engines();"
+            "print(','.join(sorted(ENGINES)))",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert probe.returncode == 0, probe.stderr
+    # P1 ships rates. Anything else appearing here is scope creep.
+    assert probe.stdout.strip() == "rates"
 
 
 def test_a_registered_engine_can_run_end_to_end(pit_accessor):

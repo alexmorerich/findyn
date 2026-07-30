@@ -15,6 +15,10 @@ export type Asset = (typeof ASSETS)[number];
  * §2.2 — the shared risk factors. Named FORCES here (and `force_scores` in D1)
  * because renaming the table is not worth the churn; the compute plane calls
  * them factors.
+ *
+ * Scores share one axis: 100 is maximally risk-supportive. `real_rate` and
+ * `usd_strength` therefore score high when real rates are low and the dollar is
+ * weak — the name identifies the variable, the axis fixes what the number means.
  */
 export const FORCES = [
   'valuation',
@@ -26,8 +30,20 @@ export const FORCES = [
   'labor',
   'risk_appetite',
   'sentiment',
+  'real_rate',
+  'usd_strength',
 ] as const;
 export type Force = (typeof FORCES)[number];
+
+/** Rate-regime vocabulary, owned by findynamics/engines/rates/domain.py. */
+export const RATE_REGIMES = [
+  'steep_easing',
+  'steep_tightening',
+  'flat',
+  'inverted',
+  're_steepening',
+] as const;
+export type RateRegime = (typeof RATE_REGIMES)[number];
 
 /** §9 L2 — the five HMM regimes. */
 export const REGIMES = [

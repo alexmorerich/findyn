@@ -8,16 +8,32 @@
  * Contract: FINDYN_V1_SPEC.md §13. Every 200 response is an envelope.
  */
 
-const DEFAULT_API_BASE = 'https://findyn.<account>.workers.dev';
+const PLACEHOLDER_API_BASE = 'https://findyn.<account>.workers.dev';
 
-/** Origin of the serving plane, without a trailing slash. */
-export const API_BASE: string = (
-  import.meta.env.PUBLIC_FINDYN_API ?? DEFAULT_API_BASE
-).replace(/\/+$/, '');
+/**
+ * Origin of the serving plane, without a trailing slash.
+ *
+ * The Worker serves this dashboard from its own assets binding, so in the
+ * deployed case the API is same-origin and the page can simply ask the browser
+ * where it is. That is deliberate: a build-time origin has to be known before
+ * the thing it points at exists, and a stale one produces a site that builds
+ * clean and reads nothing.
+ *
+ * `PUBLIC_FINDYN_API` still wins when set, for a dashboard hosted apart from
+ * the Worker (Pages, a custom domain, or `npm run dev` against `wrangler dev`).
+ */
+function resolveApiBase(): string {
+  const configured = import.meta.env.PUBLIC_FINDYN_API;
+  if (configured && !configured.includes('<account>')) return configured.replace(/\/+$/, '');
+  if (typeof window !== 'undefined' && window.location?.origin) return window.location.origin;
+  return PLACEHOLDER_API_BASE;
+}
+
+export const API_BASE: string = resolveApiBase();
 
 export const API_V1 = `${API_BASE}/api/v1`;
 
-/** True when the build never got a real API origin — worth saying out loud. */
+/** True when there is no API origin to read at all — worth saying out loud. */
 export const API_BASE_IS_PLACEHOLDER = API_BASE.includes('<account>');
 
 // ---------------------------------------------------------------------------
@@ -38,7 +54,13 @@ export interface Meta {
   spec: string;
   env: string;
   info_set: string;
-  vocabulary: { forces: string[]; regimes: string[]; horizons: string[] };
+  vocabulary: {
+    forces: string[];
+    regimes: string[];
+    horizons: string[];
+    assets?: string[];
+    rate_regimes?: string[];
+  };
 }
 
 export interface SourceHealth {
@@ -128,6 +150,76 @@ export interface PitSnapshot {
   withheld: PitWithheld[];
   total_series: number;
 }
+
+// ---------------------------------------------------------------------------
+// Multi-asset engine surface (P1)
+// ---------------------------------------------------------------------------
+
+export interface Signal {
+  name: string;
+  value: number;
+  direction: -1 | 0 | 1;
+  note: string | null;
+}
+
+export interface AssetState {
+  asset: string;
+  as_of: string;
+  model_version: string;
+  regime: string;
+  expected_return: number | null;
+  risk_score: number | null;
+  confidence: number | null;
+  signals: Signal[];
+  components: Record<string, number> | null;
+}
+
+export interface AssetSummary {
+  asset: string;
+  status: 'live' | 'awaiting_first_run';
+  as_of: string | null;
+  model_version: string | null;
+  regime: string | null;
+  risk_score: number | null;
+  confidence: number | null;
+  stale: boolean;
+  freshness_days: number | null;
+}
+
+export interface AssetList {
+  count: number;
+  assets: AssetSummary[];
+}
+
+export interface HistoryPoint {
+  as_of: string;
+  value: number;
+  meta: unknown;
+}
+
+export interface AssetHistory {
+  asset: string;
+  metric: string;
+  count: number;
+  points: HistoryPoint[];
+}
+
+/**
+ * Human-facing copy for each engine, keyed by the registry name. Kept here
+ * rather than on the card so the Engines panel needs no template change when an
+ * engine ships — an unknown name still renders, just without the blurb.
+ */
+export const ENGINE_LABELS: Record<string, { title: string; blurb: string; href?: string }> = {
+  money: { title: 'FinMoney', blurb: 'Time value — cash carry and discount factors' },
+  rates: {
+    title: 'FinRates',
+    blurb: 'Interest-rate dynamics — Nelson-Siegel curve factors and rate regimes',
+    href: '/rates',
+  },
+  equity: { title: 'FinEquity', blurb: 'Growth and risk premium — kinematics, regimes, instability' },
+  gold: { title: 'FinGold', blurb: 'Trust and crisis protection — regime switching on real rates' },
+  crypto: { title: 'FinCrypto', blurb: 'Network scarcity — experimental, excluded from portfolios' },
+};
 
 // ---------------------------------------------------------------------------
 // Result type
@@ -258,6 +350,24 @@ export function getSeries(
 
 export function getPit(asOf: string): Promise<ApiResult<PitSnapshot>> {
   return apiGet<PitSnapshot>(`/pit?as_of=${encodeURIComponent(asOf)}`);
+}
+
+/** Registered engines and their staleness — drives the home Engines panel. */
+export const getAssets = () => apiGet<AssetList>('/assets');
+
+export const getAssetState = (asset: string) =>
+  apiGet<AssetState>(`/assets/${encodeURIComponent(asset)}/state`);
+
+export function getAssetHistory(
+  asset: string,
+  metric: string,
+  opts: { from?: string; to?: string; limit?: number } = {},
+): Promise<ApiResult<AssetHistory>> {
+  const query = new URLSearchParams({ metric });
+  if (opts.from) query.set('from', opts.from);
+  if (opts.to) query.set('to', opts.to);
+  if (opts.limit !== undefined) query.set('limit', String(opts.limit));
+  return apiGet<AssetHistory>(`/assets/${encodeURIComponent(asset)}/history?${query}`);
 }
 
 /**

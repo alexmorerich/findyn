@@ -1,4 +1,5 @@
 import type { Env } from '../types';
+import { ASSETS, FORCES } from '../domain';
 
 /**
  * Compute-plane write-back (FINDYN_V1_SPEC.md §6).
@@ -60,6 +61,46 @@ export interface IngestionRow {
   error?: string | null;
 }
 
+/**
+ * P1 batch types (docs/redesign/03-contracts.md §6). The design sketch showed
+ * these as separate `{kind, rows}` envelopes; they are carried as named arrays
+ * on the existing envelope instead, so one signed request can hold a whole run
+ * and there is exactly one payload shape rather than two.
+ */
+export interface SignalRow {
+  name: string;
+  value: number;
+  direction: -1 | 0 | 1;
+  note?: string | null;
+}
+
+export interface AssetStateRow {
+  asset: string;
+  as_of: string;
+  model_version: string;
+  regime: string;
+  expected_return: number | null;
+  risk_score: number;
+  confidence: number;
+  signals: SignalRow[];
+  components?: Record<string, number> | null;
+}
+
+export interface EngineOutputRow {
+  asset: string;
+  metric: string;
+  as_of: string;
+  value: number;
+  meta?: unknown;
+}
+
+export interface FactorRow {
+  force: string;
+  as_of: string;
+  score: number;
+  components?: Record<string, number> | null;
+}
+
 export interface WriteBackPayload {
   model_version?: string;
   generated_at?: string;
@@ -68,6 +109,9 @@ export interface WriteBackPayload {
   prices?: PriceRow[];
   quality?: QualityRow[];
   ingestion?: IngestionRow[];
+  factors?: FactorRow[];
+  asset_state?: AssetStateRow[];
+  engine_output?: EngineOutputRow[];
 }
 
 export interface WriteBackResult {
@@ -76,6 +120,9 @@ export interface WriteBackResult {
   prices: number;
   quality: number;
   ingestion: number;
+  factors: number;
+  asset_state: number;
+  engine_output: number;
 }
 
 export class PayloadError extends Error {}
@@ -105,6 +152,39 @@ function requireNumber(value: unknown, field: string): number {
 function optionalDate(value: unknown, field: string): string | null {
   if (value === undefined || value === null) return null;
   return requireDate(value, field);
+}
+
+function requireRange(value: unknown, lo: number, hi: number, field: string): number {
+  const n = requireNumber(value, field);
+  if (n < lo || n > hi) {
+    throw new PayloadError(`${field} must be within [${lo}, ${hi}], got ${n}`);
+  }
+  return n;
+}
+
+function requireMember(value: unknown, allowed: readonly string[], field: string): string {
+  const s = requireString(value, field);
+  if (!allowed.includes(s)) {
+    throw new PayloadError(`${field} must be one of ${allowed.join('|')}, got ${s}`);
+  }
+  return s;
+}
+
+/**
+ * Explanation traces are free-form maps, but every value must still be a finite
+ * number: a NaN in `components` renders as an empty cell on the dashboard and
+ * looks like missing data rather than a bug.
+ */
+function optionalComponents(value: unknown, field: string): Record<string, number> | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new PayloadError(`${field} must be an object`);
+  }
+  const out: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = requireNumber(raw, `${field}.${key}`);
+  }
+  return out;
 }
 
 /**
@@ -191,14 +271,63 @@ export function validatePayload(raw: unknown): WriteBackPayload {
     error: g?.error ?? null,
   }));
 
+  const modelVersion = typeof p.model_version === 'string' ? p.model_version : 'unversioned';
+
+  const factors = (p.factors as FactorRow[] | undefined)?.map((f, i) => ({
+    force: requireMember(f?.force, FORCES, `factors[${i}].force`),
+    as_of: requireDate(f?.as_of, `factors[${i}].as_of`),
+    score: requireRange(f?.score, 0, 100, `factors[${i}].score`),
+    components: optionalComponents(f?.components, `factors[${i}].components`),
+  }));
+
+  // The engine vocabulary is closed. An unknown asset means the compute plane
+  // and this plane disagree about what exists, and writing it would create a
+  // row no endpoint can ever serve.
+  const assetState = (p.asset_state as AssetStateRow[] | undefined)?.map((s, i) => ({
+    asset: requireMember(s?.asset, ASSETS, `asset_state[${i}].asset`),
+    as_of: requireDate(s?.as_of, `asset_state[${i}].as_of`),
+    model_version: requireString(s?.model_version, `asset_state[${i}].model_version`),
+    regime: requireString(s?.regime, `asset_state[${i}].regime`),
+    expected_return:
+      s?.expected_return === undefined || s?.expected_return === null
+        ? null
+        : requireNumber(s.expected_return, `asset_state[${i}].expected_return`),
+    risk_score: requireRange(s?.risk_score, 0, 100, `asset_state[${i}].risk_score`),
+    confidence: requireRange(s?.confidence, 0, 1, `asset_state[${i}].confidence`),
+    signals: (s?.signals ?? []).map((sig, j) => {
+      const direction = requireNumber(sig?.direction, `asset_state[${i}].signals[${j}].direction`);
+      if (direction !== -1 && direction !== 0 && direction !== 1) {
+        throw new PayloadError(`asset_state[${i}].signals[${j}].direction must be -1, 0 or 1`);
+      }
+      return {
+        name: requireString(sig?.name, `asset_state[${i}].signals[${j}].name`),
+        value: requireNumber(sig?.value, `asset_state[${i}].signals[${j}].value`),
+        direction: direction as -1 | 0 | 1,
+        note: sig?.note ?? null,
+      };
+    }),
+    components: optionalComponents(s?.components, `asset_state[${i}].components`),
+  }));
+
+  const engineOutput = (p.engine_output as EngineOutputRow[] | undefined)?.map((o, i) => ({
+    asset: requireMember(o?.asset, ASSETS, `engine_output[${i}].asset`),
+    metric: requireString(o?.metric, `engine_output[${i}].metric`),
+    as_of: requireDate(o?.as_of, `engine_output[${i}].as_of`),
+    value: requireNumber(o?.value, `engine_output[${i}].value`),
+    meta: o?.meta ?? null,
+  }));
+
   return {
-    model_version: typeof p.model_version === 'string' ? p.model_version : 'unversioned',
+    model_version: modelVersion,
     generated_at: typeof p.generated_at === 'string' ? p.generated_at : new Date().toISOString(),
     metadata,
     observations,
     prices,
     quality,
     ingestion,
+    factors,
+    asset_state: assetState,
+    engine_output: engineOutput,
   };
 }
 
@@ -256,12 +385,43 @@ export async function applyWriteBack(env: Env, payload: WriteBackPayload): Promi
      VALUES (?, ?, ?, ?, ?, ?)`,
   );
 
+  const factorStmt = db.prepare(
+    `INSERT INTO force_scores (date, force, score, components, model_version)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(date, force, model_version) DO UPDATE SET
+       score = excluded.score, components = excluded.components`,
+  );
+
+  // Keyed on (asset, as_of, model_version), so re-running a day replaces that
+  // day's state for that model and leaves other models' history alone.
+  const stateStmt = db.prepare(
+    `INSERT INTO asset_state
+       (asset, as_of, model_version, regime, expected_return, risk_score,
+        confidence, signals, components, written_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(asset, as_of, model_version) DO UPDATE SET
+       regime = excluded.regime, expected_return = excluded.expected_return,
+       risk_score = excluded.risk_score, confidence = excluded.confidence,
+       signals = excluded.signals, components = excluded.components,
+       written_at = excluded.written_at`,
+  );
+
+  const outputStmt = db.prepare(
+    `INSERT INTO engine_output (asset, metric, as_of, value, meta, written_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(asset, metric, as_of) DO UPDATE SET
+       value = excluded.value, meta = excluded.meta, written_at = excluded.written_at`,
+  );
+
   const result: WriteBackResult = {
     metadata: 0,
     observations: 0,
     prices: 0,
     quality: 0,
     ingestion: 0,
+    factors: 0,
+    asset_state: 0,
+    engine_output: 0,
   };
 
   if (payload.metadata?.length) {
@@ -334,6 +494,57 @@ export async function applyWriteBack(env: Env, payload: WriteBackPayload): Promi
       db,
       payload.ingestion.map((g) =>
         logStmt.bind(now, g.source, g.series_id ?? null, g.status, g.rows_written ?? 0, g.error ?? null),
+      ),
+    );
+  }
+
+  if (payload.factors?.length) {
+    result.factors = await runBatched(
+      db,
+      payload.factors.map((f) =>
+        factorStmt.bind(
+          f.as_of,
+          f.force,
+          f.score,
+          f.components ? JSON.stringify(f.components) : null,
+          payload.model_version ?? 'unversioned',
+        ),
+      ),
+    );
+  }
+
+  if (payload.asset_state?.length) {
+    result.asset_state = await runBatched(
+      db,
+      payload.asset_state.map((s) =>
+        stateStmt.bind(
+          s.asset,
+          s.as_of,
+          s.model_version,
+          s.regime,
+          s.expected_return,
+          s.risk_score,
+          s.confidence,
+          JSON.stringify(s.signals ?? []),
+          s.components ? JSON.stringify(s.components) : null,
+          now,
+        ),
+      ),
+    );
+  }
+
+  if (payload.engine_output?.length) {
+    result.engine_output = await runBatched(
+      db,
+      payload.engine_output.map((o) =>
+        outputStmt.bind(
+          o.asset,
+          o.metric,
+          o.as_of,
+          o.value,
+          o.meta === null || o.meta === undefined ? null : JSON.stringify(o.meta),
+          now,
+        ),
       ),
     );
   }

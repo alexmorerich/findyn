@@ -40,3 +40,31 @@ class PITAccessor(Protocol):
     def value(self, series_id: str) -> float | None:
         """Latest knowable value for one series, or ``None`` if unavailable."""
         ...
+
+    def history(
+        self,
+        series_ids: Iterable[str] | None = None,
+        *,
+        start: Any | None = None,
+    ) -> Any:
+        """Whole knowable history as seen from :attr:`as_of`.
+
+        ``latest`` answers "what is the value now"; an expanding-window fit
+        (§14.1 rule 4) needs "what did this series look like at the time". Long
+        frame, one row per (series, period), newest vintage per period.
+        """
+        ...
+
+    def wide(
+        self,
+        series_ids: Iterable[str] | None = None,
+        *,
+        start: Any | None = None,
+    ) -> Any:
+        """:meth:`history` pivoted to one column per series, indexed by period.
+
+        The shape a cross-sectional model wants: a yield curve is a row, a
+        factor's inputs are columns. Missing observations stay ``NaN`` rather
+        than being filled — a holiday and a zero are not the same thing.
+        """
+        ...

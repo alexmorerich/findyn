@@ -1,8 +1,11 @@
 name: Compute — daily
 
-# Daily feature + state run (FINDYN_V1_SPEC.md §6).
-# The schedule is intentionally commented out until M2 lands: a cron that runs a
-# not-implemented job every day is noise, not a heartbeat.
+# Daily state run: build the WorldState, run every enabled engine, write back
+# (docs/redesign/01-target-architecture.md §8).
+#
+# The schedule was parked until an engine existed — a cron running a
+# not-implemented job every day is noise, not a heartbeat. P1 ships FinRates, so
+# it now runs for real.
 on:
   workflow_dispatch:
     inputs:
@@ -13,8 +16,8 @@ on:
         description: "Compute without writing back"
         type: boolean
         default: true
-  # schedule:
-  #   - cron: "0 3 * * 2-6"   # 03:00 UTC, after the previous session's close
+  schedule:
+    - cron: "0 3 * * 2-6"   # 03:00 UTC, after the previous session's close
 
 jobs:
   daily:

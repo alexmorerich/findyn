@@ -89,11 +89,52 @@ factors:
     series:
       - {id: "FRED:UMCSENT", provider: fred, frequency: monthly, publication_lag_days: 14, direction: 1}
 
+  # Every factor score is on one axis: 100 = maximally risk-supportive. The two
+  # below therefore read "high score = low real rates" and "high score = weak
+  # dollar"; `direction` is what orients each series onto that axis. Consumers
+  # wanting the level itself read FactorState.components, which carries it.
+  real_rate:
+    weight: 1.0
+    series:
+      # 10y real rate = nominal - breakeven. Encoded as its two legs with
+      # opposing directions rather than as a DERIVED series, so the same scoring
+      # pipeline handles it and no series needs computing before ingestion.
+      - {id: "FRED:DGS10", provider: fred, frequency: daily, publication_lag_days: 1, direction: -1}
+      - {id: "FRED:T10YIE", provider: fred, frequency: daily, publication_lag_days: 1, direction: 1}
+
+  usd_strength:
+    weight: 1.0
+    series:
+      # Broad nominal trade-weighted dollar. A stronger dollar tightens global
+      # financial conditions, hence direction -1 on the supportive axis.
+      - {id: "FRED:DTWEXBGS", provider: fred, frequency: daily, publication_lag_days: 1, direction: -1}
+
 # ---------------------------------------------------------------------------
 # Engine-private series. Nothing here is shared: another engine that needs one
 # of these promotes it into `factors` rather than reaching across the boundary.
 # ---------------------------------------------------------------------------
 engines:
+  rates:
+    # The observable US Treasury constant-maturity curve. Every tenor is its own
+    # series; which of them exist on a given day varies (holidays, and DGS1MO
+    # only starts in 2001), so curve.py fits whatever is present rather than
+    # requiring the full set. The tenor each id represents, in years, is in
+    # config/engines/rates.yaml — this file stays a pure series map.
+    series:
+      dgs1mo:  {id: "FRED:DGS1MO", provider: fred, frequency: daily, publication_lag_days: 1}
+      dgs3mo:  {id: "FRED:DGS3MO", provider: fred, frequency: daily, publication_lag_days: 1}
+      dgs6mo:  {id: "FRED:DGS6MO", provider: fred, frequency: daily, publication_lag_days: 1}
+      dgs1:    {id: "FRED:DGS1",   provider: fred, frequency: daily, publication_lag_days: 1}
+      dgs2:    {id: "FRED:DGS2",   provider: fred, frequency: daily, publication_lag_days: 1}
+      dgs3:    {id: "FRED:DGS3",   provider: fred, frequency: daily, publication_lag_days: 1}
+      dgs5:    {id: "FRED:DGS5",   provider: fred, frequency: daily, publication_lag_days: 1}
+      dgs7:    {id: "FRED:DGS7",   provider: fred, frequency: daily, publication_lag_days: 1}
+      dgs10:   {id: "FRED:DGS10",  provider: fred, frequency: daily, publication_lag_days: 1}
+      dgs20:   {id: "FRED:DGS20",  provider: fred, frequency: daily, publication_lag_days: 1}
+      dgs30:   {id: "FRED:DGS30",  provider: fred, frequency: daily, publication_lag_days: 1}
+      # 10y breakeven inflation — not a curve point; used for the real-rate read.
+      breakeven10: {id: "FRED:T10YIE", provider: fred, frequency: daily, publication_lag_days: 1}
+
   equity:
     # The S&P500 price backbone — FinEquity's private input (FINDYN_V1_SPEC.md).
     series:

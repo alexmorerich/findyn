@@ -9,6 +9,19 @@ import Base from '../layouts/Base.astro';
   heading="System status"
   intro="What is running, what last ingested, and what is still ahead. Everything on this page is read from the live API by your browser; nothing is baked into the page."
 >
+  <section class="panel" aria-labelledby="engines-h">
+    <div class="panel__head">
+      <h2 id="engines-h">Engines</h2>
+      <span class="panel__note">/api/v1/assets</span>
+    </div>
+    <p class="prose">
+      One card per registered asset engine, read from the registry rather than from whatever
+      happens to be in the database — an engine that has shipped but not yet run says so instead
+      of disappearing.
+    </p>
+    <div id="engines" style="margin-top:0.85rem"></div>
+  </section>
+
   <section class="panel" aria-labelledby="planes-h">
     <div class="panel__head">
       <h2 id="planes-h">Planes</h2>
@@ -50,4 +63,7 @@ import Base from '../layouts/Base.astro';
 
 <script>
   import '../scripts/status';
+  import { mountEngines } from '../scripts/engines';
+
+  void mountEngines('#engines');
 </script>

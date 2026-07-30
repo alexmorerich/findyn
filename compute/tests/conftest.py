@@ -3,16 +3,47 @@
 The resilience layer is built around injected time, sleep and HTTP, so tests
 drive real backoff and breaker transitions without spending wall-clock seconds
 or touching the network.
+
+Nothing in the suite reaches the network or reads a live API key: model tests
+run on synthetic Nelson-Siegel curves or on the committed month-end Treasury
+snapshot described in ``tests/fixtures/README.md``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 
+from findynamics.core.artifacts import ArtifactStore
+from findynamics.core.config import load_series_config
 from findynamics.data.providers.resilience import Response
+
+FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
+
+
+@pytest.fixture(scope="session")
+def treasury_observations() -> pd.DataFrame:
+    """The committed month-end Treasury curve snapshot, as a PIT frame."""
+    frame = pd.read_csv(FIXTURE_DIR / "treasury_monthly.csv")
+    for column in ("obs_date", "release_date", "revision_date"):
+        frame[column] = pd.to_datetime(frame[column])
+    return frame
+
+
+@pytest.fixture
+def config():
+    """The shipped configuration, loaded fresh so a test can copy and edit it."""
+    return load_series_config()
+
+
+@pytest.fixture
+def artifacts(tmp_path) -> ArtifactStore:
+    """Artifact store under tmp_path, so no test reads or writes a real refit."""
+    return ArtifactStore(tmp_path / "artifacts")
 
 
 class FakeClock:

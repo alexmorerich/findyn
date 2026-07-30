@@ -49,7 +49,25 @@ def _validate(observations: pd.DataFrame) -> pd.DataFrame:
             f"{int(early.sum())} row(s); first offenders:\n{offenders.to_string(index=False)}"
         )
 
+    frame["knowable_at"] = _knowable_at(frame)
     return frame
+
+
+def _knowable_at(frame: pd.DataFrame) -> pd.Series:
+    """When each individual figure became knowable.
+
+    ``release_date`` says when the *period* first became observable and is
+    therefore constant across revisions of that period; ``revision_date`` says
+    when *this* figure was issued. Filtering on release_date alone would admit a
+    later revision the moment the original print was published — a value nobody
+    could have seen. Sources that publish no vintage carry no revision_date, and
+    for them the two dates coincide.
+    """
+    released = frame["release_date"]
+    if "revision_date" not in frame.columns:
+        return released
+    revised = pd.to_datetime(frame["revision_date"]).dt.normalize()
+    return revised.fillna(released).where(lambda s: s >= released, released)
 
 
 def pit_join(
@@ -62,9 +80,9 @@ def pit_join(
 
     Args:
         observations: long-format frame with columns ``series_id``, ``obs_date``,
-            ``release_date``, ``value`` and optionally ``vintage``.
-        as_of: the information-set cutoff. Rows with ``release_date > as_of`` are
-            dropped outright — they did not exist yet.
+            ``release_date``, ``value`` and optionally ``revision_date``/``vintage``.
+        as_of: the information-set cutoff. Figures not yet knowable at that date
+            are dropped outright — they did not exist yet.
         series_ids: optional restriction; series absent from the data are simply
             not returned rather than raising, so a provider outage degrades the
             feature set instead of the run (§14.2).
@@ -75,13 +93,7 @@ def pit_join(
         ``staleness_days`` between ``obs_date`` and ``as_of``.
     """
     cutoff = _to_date(as_of)
-    frame = _validate(observations)
-
-    if series_ids is not None:
-        wanted = set(series_ids)
-        frame = frame[frame["series_id"].isin(wanted)]
-
-    knowable = frame[frame["release_date"] <= cutoff]
+    knowable = _knowable(observations, cutoff, series_ids)
     if knowable.empty:
         return pd.DataFrame(
             columns=["obs_date", "release_date", "value", "staleness_days"]
@@ -89,13 +101,62 @@ def pit_join(
 
     # Newest period first; among revisions of the same period, the newest vintage.
     ordered = knowable.sort_values(
-        ["series_id", "obs_date", "release_date"], ascending=[True, False, False]
+        ["series_id", "obs_date", "knowable_at"], ascending=[True, False, False]
     )
     latest = ordered.groupby("series_id", sort=True).head(1).set_index("series_id")
 
     result = latest[["obs_date", "release_date", "value"]].copy()
     result["staleness_days"] = (cutoff - result["obs_date"]).dt.days
 
+    assert_no_lookahead(result, cutoff)
+    return result
+
+
+def _knowable(
+    observations: pd.DataFrame,
+    cutoff: pd.Timestamp,
+    series_ids: Iterable[str] | None,
+) -> pd.DataFrame:
+    """Validated rows that had been published on or before ``cutoff``."""
+    frame = _validate(observations)
+    if series_ids is not None:
+        frame = frame[frame["series_id"].isin(set(series_ids))]
+    return frame[frame["knowable_at"] <= cutoff]
+
+
+def pit_history(
+    observations: pd.DataFrame,
+    as_of: str | date | datetime | pd.Timestamp,
+    *,
+    series_ids: Iterable[str] | None = None,
+    start: str | date | datetime | pd.Timestamp | None = None,
+) -> pd.DataFrame:
+    """The whole knowable history, not just its last point.
+
+    :func:`pit_join` answers "what is the current value"; a model that fits an
+    expanding window needs "what did the series look like, as seen from
+    ``as_of``". Same filter, same vintage rule — one row per (series, period),
+    carrying the newest figure that had been published by the cutoff.
+
+    Returns a long frame sorted by ``series_id`` then ``obs_date`` ascending,
+    with columns ``series_id``, ``obs_date``, ``release_date`` and ``value``.
+    Empty input yields an empty frame of that shape rather than raising.
+    """
+    cutoff = _to_date(as_of)
+    knowable = _knowable(observations, cutoff, series_ids)
+    if start is not None:
+        knowable = knowable[knowable["obs_date"] >= _to_date(start)]
+
+    columns = ["series_id", "obs_date", "release_date", "value"]
+    if knowable.empty:
+        return pd.DataFrame(columns=columns)
+
+    ordered = knowable.sort_values(
+        ["series_id", "obs_date", "knowable_at"], ascending=[True, True, False]
+    )
+    newest = ordered.groupby(["series_id", "obs_date"], sort=True).head(1)
+
+    result = newest[columns].sort_values(["series_id", "obs_date"]).reset_index(drop=True)
     assert_no_lookahead(result, cutoff)
     return result
 

@@ -53,11 +53,28 @@ def test_engine_series_ids_survived_the_move_from_the_price_block():
     assert price["deep_history"].id == "PRICE:deep_history"
 
 
-def test_no_engine_ships_enabled():
-    """P0 restructures; it builds no models. Enabling one would run nothing."""
+def test_only_engines_whose_phase_has_landed_are_enabled():
+    """An engine enabled before its models exist would publish nothing daily."""
     config = load_series_config()
-    assert config.enabled_engine_names() == ()
+    assert config.enabled_engine_names() == ("rates",)
     assert set(config.engines) == {"money", "rates", "equity", "gold", "crypto"}
+
+
+def test_the_rates_engine_declares_its_curve_in_config_not_code():
+    """Adding the 4-month bill must be a yaml edit, not a deploy."""
+    config = load_series_config()
+    rates = config.engines["rates"]
+
+    assert {spec.id for spec in rates.series.values()} >= {
+        "FRED:DGS1MO",
+        "FRED:DGS3MO",
+        "FRED:DGS10",
+        "FRED:DGS30",
+        "FRED:T10YIE",
+    }
+    assert set(rates.params["tenors"]) == {
+        spec.id for spec in rates.series.values() if spec.id != rates.params["breakeven_series"]
+    }
 
 
 def _write(tmp_path: Path, body: str) -> Path:

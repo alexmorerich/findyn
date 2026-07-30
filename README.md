@@ -247,6 +247,12 @@ disclaimer.
 | Endpoint | Returns | Milestone |
 |---|---|---|
 | `GET /api/v1/health` | Per-source ingestion status and staleness | ✅ M0 |
+| `GET /api/v1/meta` | Version, environment, vocabulary | ✅ M1-A |
+| `GET /api/v1/series` · `/series/:id` | Ingested series catalogue and observations | ✅ M1-A |
+| `GET /api/v1/pit` | Point-in-time snapshot at a date | ✅ M1-A |
+| `GET /api/v1/assets` | Registered engines with status and staleness | ✅ P1 |
+| `GET /api/v1/assets/:asset/state` | Latest `AssetState` for one engine | ✅ P1 |
+| `GET /api/v1/assets/:asset/history?metric=` | `engine_output` time series | ✅ P1 |
 | `GET /api/v1/state` | Latest K(t) + F(t) snapshot | M2 |
 | `GET /api/v1/forces` | Force score history with component breakdowns | M2 |
 | `GET /api/v1/regime` | Regime probability history | M3 |
@@ -300,6 +306,12 @@ for L3, posterior decomposition for L2). Crash risk is always published as its t
 ---
 
 ## Milestones
+
+The v1 milestones below describe the S&P500 engine, which is now
+`findynamics/engines/equity`. The multi-asset phases that surround it are in
+[`docs/redesign/`](docs/redesign/): **P0** (package restructure and core
+contracts) and **P1** (FinRates) are delivered; P2–P6 add the money, equity,
+gold, crypto and portfolio engines.
 
 | M | Deliverable | Acceptance | Status |
 |---|---|---|---|
