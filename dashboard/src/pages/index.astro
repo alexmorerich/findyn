@@ -1,0 +1,53 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="System Status"
+  description="Live status of the FinDyn serving plane, compute plane, and D1 feature store."
+  eyebrow="Instrument panel"
+  heading="System status"
+  intro="What is running, what last ingested, and what is still ahead. Everything on this page is read from the live API by your browser; nothing is baked into the page."
+>
+  <section class="panel" aria-labelledby="planes-h">
+    <div class="panel__head">
+      <h2 id="planes-h">Planes</h2>
+      <span class="panel__note">/api/v1/meta · /api/v1/health</span>
+    </div>
+    <div class="tiles" id="status-tiles"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="engine-h">
+    <div class="panel__head">
+      <h2 id="engine-h">Engine</h2>
+      <span class="panel__note">/api/v1/meta</span>
+    </div>
+    <div id="engine-meta"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="sources-h">
+    <div class="panel__head">
+      <h2 id="sources-h">Ingestion sources</h2>
+      <span class="panel__note">/api/v1/health · ingestion_log</span>
+    </div>
+    <div id="sources"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="roadmap-h">
+    <div class="panel__head">
+      <h2 id="roadmap-h">Reserved endpoints</h2>
+      <span class="panel__note">FINDYN_V1_SPEC.md §13</span>
+    </div>
+    <p class="prose">
+      These endpoints are part of the published contract but are delivered by later milestones.
+      Until then the API answers <code>501 not_implemented</code> with the milestone that will
+      deliver them, so a consumer can tell &ldquo;not built yet&rdquo; from &ldquo;built, but no
+      data&rdquo;. The status below is the API&rsquo;s own answer, probed live.
+    </p>
+    <div id="roadmap" style="margin-top:0.85rem"></div>
+  </section>
+</Base>
+
+<script>
+  import '../scripts/status';
+</script>

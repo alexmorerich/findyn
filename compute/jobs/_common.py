@@ -51,7 +51,7 @@ def sign_payload(secret: str, body: str, timestamp: int | None = None) -> tuple[
 
 def write_back(payload: dict[str, Any], *, dry_run: bool = False) -> None:
     """POST results to the serving plane's HMAC-authenticated admin endpoint (§6)."""
-    log = logging.getLogger("findyn.writeback")
+    log = logging.getLogger("findynamics.writeback")
     body = json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
     if dry_run:
@@ -80,7 +80,7 @@ def write_back(payload: dict[str, Any], *, dry_run: bool = False) -> None:
 
 def not_yet(milestone: str, section: str) -> int:
     """Exit path for a job whose milestone has not landed."""
-    logging.getLogger("findyn.jobs").error(
+    logging.getLogger("findynamics.jobs").error(
         "not implemented: delivered in milestone %s (FINDYN_V1_SPEC.md %s)", milestone, section
     )
     return 2

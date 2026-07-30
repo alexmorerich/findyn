@@ -1,0 +1,246 @@
+---
+import Base from '../layouts/Base.astro';
+
+/**
+ * Hand-authored diagram — no image file, no diagramming library.
+ * Coordinates are laid out on a 1200 x 620 canvas; below ~1020px the wrapper
+ * scrolls horizontally rather than shrinking the labels (see .diagram-scroll).
+ */
+
+// Column geometry, kept in one place so the boxes and arrows cannot drift apart.
+const P = { x: 24, y: 64, w: 160, h: 346 };
+const C = { x: 224, y: 64, w: 280, h: 346 };
+const F = { x: 544, y: 64, w: 176, h: 300 };
+const S = { x: 760, y: 64, w: 232, h: 346 };
+const D = { x: 1032, y: 64, w: 134, h: 160 };
+
+const providers = [
+  'FRED',
+  'Shiller 1871+',
+  'BLS',
+  'BEA',
+  'Treasury',
+  'Alpha Vantage',
+  'Stooq (backfill)',
+  'Yahoo (fallback)',
+];
+
+const computeSteps = [
+  { l1: 'Provider adapters', l2: 'rate limit · circuit breaker', cls: 'arch-item' },
+  { l1: 'Quality engine', l2: 'validate · normalise · outliers', cls: 'arch-item' },
+  { l1: 'PIT join · release_date ≤ t', l2: 'the only sanctioned macro read', cls: 'arch-item arch-item--key' },
+  { l1: 'Feature pipeline', l2: 'Kalman · fractional differencing', cls: 'arch-item' },
+  { l1: 'Models — ML lives here', l2: 'HMM · XGBoost · EVT · Monte Carlo', cls: 'arch-item arch-item--ml' },
+];
+
+const servingParts = [
+  { l1: 'Cron ingestion workers', l2: 'providers → validate → D1', cls: 'arch-item' },
+  { l1: 'Hono API Worker', l2: '/api/v1 · read-only · public', cls: 'arch-item' },
+  { l1: 'Admin Worker', l2: '/admin/v1/results · HMAC', cls: 'arch-item arch-item--hmac' },
+  { l1: 'KV cache', l2: 'realtime + last-known-good', cls: 'arch-item' },
+  { l1: 'R2 archive', l2: 'raw snapshots · MC bundles', cls: 'arch-item' },
+];
+
+const tables = [
+  'macro_series',
+  'market_price',
+  'derived_features',
+  'force_scores',
+  'regime_state',
+  'instability_index',
+  'forecast_distribution',
+  'ingestion_log',
+];
+
+const notes = [
+  'ML runs only in the Python compute plane. Cloudflare Workers cannot run the scientific stack — Kalman, HMM, XGBoost and EVT never execute in the serving plane (§6).',
+  'The compute plane writes its results back over an HMAC-signed request to the Admin Worker. The public API is read-only; there is no other write path in.',
+  'Serving-plane cron triggers also pull the providers directly and land raw observations in D1, which the compute plane then reads back point-in-time.',
+  'Every macro row stores obs_date and release_date separately, so the information set of any past date can be reconstructed exactly (§14.1).',
+];
+---
+
+<Base
+  title="Architecture"
+  description="How FinDyn is split between a Python compute plane and a Cloudflare serving plane."
+  eyebrow="Two planes"
+  heading="Architecture"
+  intro="Cloudflare Workers cannot run the Python scientific stack, so the system is split in two. Everything statistical happens in Python; Cloudflare stores, serves and schedules."
+>
+  <section class="panel" aria-labelledby="diagram-h">
+    <div class="panel__head">
+      <h2 id="diagram-h">Data path</h2>
+      <span class="panel__note">FINDYN_V1_SPEC.md §6</span>
+    </div>
+
+    <div class="diagram-scroll" tabindex="0" role="group" aria-labelledby="diagram-h">
+      <svg
+        viewBox="0 0 1200 620"
+        width="1200"
+        height="620"
+        role="img"
+        aria-label="FinDyn architecture: external data providers feed a Python compute plane (provider adapters, quality engine, point-in-time join, feature pipeline, models); the compute plane writes to a Cloudflare D1 feature store; the Cloudflare serving plane (cron ingestion workers, Hono read-only API Worker, HMAC-authenticated admin worker, KV cache, R2 archive) reads D1 and serves the static Astro dashboard over HTTPS. Machine learning runs only in the Python plane, and the compute plane writes results back over an HMAC-signed request."
+      >
+        <defs>
+          <marker id="ah-accent" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" orient="auto">
+            <path d="M0,0 L8,4 L0,8 z" fill="var(--accent)"></path>
+          </marker>
+          <marker id="ah-warn" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" orient="auto">
+            <path d="M0,0 L8,4 L0,8 z" fill="var(--warn)"></path>
+          </marker>
+          <marker id="ah-faint" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" orient="auto">
+            <path d="M0,0 L8,4 L0,8 z" fill="var(--fg-faint)"></path>
+          </marker>
+        </defs>
+
+        {/* ---- providers ------------------------------------------------ */}
+        <rect class="arch-group" x={P.x} y={P.y} width={P.w} height={P.h} rx="6"></rect>
+        <text class="arch-title" x={P.x + 12} y={P.y + 24}>Data providers</text>
+        <text class="arch-sub" x={P.x + 12} y={P.y + 40}>external sources</text>
+        {
+          providers.map((name, i) => (
+            <>
+              <rect class="arch-item" x={P.x + 10} y={116 + i * 36} width={P.w - 20} height="30" rx="4" />
+              <text class="arch-l2" x={P.x + 22} y={116 + i * 36 + 19}>
+                {name}
+              </text>
+            </>
+          ))
+        }
+
+        {/* ---- compute plane -------------------------------------------- */}
+        <rect class="arch-group arch-group--compute" x={C.x} y={C.y} width={C.w} height={C.h} rx="6"></rect>
+        <text class="arch-title" x={C.x + 12} y={C.y + 24}>Compute plane</text>
+        <text class="arch-sub" x={C.x + 12} y={C.y + 40}>Python 3.11 · GitHub Actions</text>
+        {
+          computeSteps.map((step, i) => (
+            <>
+              <rect class={step.cls} x={C.x + 10} y={116 + i * 56} width={C.w - 20} height="46" rx="4" />
+              <text class="arch-l1" x={C.x + 22} y={116 + i * 56 + 20}>
+                {step.l1}
+              </text>
+              <text class="arch-l2" x={C.x + 22} y={116 + i * 56 + 36}>
+                {step.l2}
+              </text>
+            </>
+          ))
+        }
+
+        {/* ---- feature store -------------------------------------------- */}
+        <rect class="arch-group arch-group--store" x={F.x} y={F.y} width={F.w} height={F.h} rx="6"></rect>
+        <text class="arch-title" x={F.x + 12} y={F.y + 24}>Feature store</text>
+        <text class="arch-sub" x={F.x + 12} y={F.y + 40}>Cloudflare D1</text>
+        {
+          tables.map((t, i) => (
+            <text class="arch-mono" x={F.x + 12} y={128 + i * 20}>
+              {t}
+            </text>
+          ))
+        }
+        <rect class="arch-item arch-item--key" x={F.x + 10} y="286" width={F.w - 20} height="62" rx="4"></rect>
+        <text class="arch-l2" x={F.x + 22} y="304">every row stores</text>
+        <text class="arch-l2" x={F.x + 22} y="320">obs_date and</text>
+        <text class="arch-l2" x={F.x + 22} y="336">release_date</text>
+
+        {/* ---- serving plane -------------------------------------------- */}
+        <rect class="arch-group arch-group--serving" x={S.x} y={S.y} width={S.w} height={S.h} rx="6"></rect>
+        <text class="arch-title" x={S.x + 12} y={S.y + 24}>Serving plane</text>
+        <text class="arch-sub" x={S.x + 12} y={S.y + 40}>Cloudflare Workers · Hono</text>
+        {
+          servingParts.map((part, i) => (
+            <>
+              <rect class={part.cls} x={S.x + 10} y={116 + i * 56} width={S.w - 20} height="46" rx="4" />
+              <text class="arch-l1" x={S.x + 22} y={116 + i * 56 + 20}>
+                {part.l1}
+              </text>
+              <text class="arch-l2" x={S.x + 22} y={116 + i * 56 + 36}>
+                {part.l2}
+              </text>
+            </>
+          ))
+        }
+
+        {/* ---- dashboard ------------------------------------------------- */}
+        <rect class="arch-group" x={D.x} y={D.y} width={D.w} height={D.h} rx="6"></rect>
+        <text class="arch-title" x={D.x + 10} y={D.y + 24}>Dashboard</text>
+        <text class="arch-sub" x={D.x + 10} y={D.y + 40}>Astro · static</text>
+        <text class="arch-l2" x={D.x + 10} y="130">no server runtime</text>
+        <text class="arch-l2" x={D.x + 10} y="150">deploy: Pages or</text>
+        <text class="arch-l2" x={D.x + 10} y="166">Workers assets</text>
+        <text class="arch-l2" x={D.x + 10} y="190">reads /api/v1 in</text>
+        <text class="arch-l2" x={D.x + 10} y="206">the browser</text>
+
+        {/* ---- forward flow ---------------------------------------------- */}
+        <path class="arch-flow" d="M184,200 L222,200" marker-end="url(#ah-accent)"></path>
+        <text class="arch-flowlabel" x="204" y="190" text-anchor="middle">pull</text>
+
+        <path class="arch-flow" d="M504,200 L542,200" marker-end="url(#ah-accent)"></path>
+        <text class="arch-flowlabel" x="524" y="190" text-anchor="middle">write</text>
+
+        <path class="arch-flow" d="M720,200 L758,200" marker-end="url(#ah-accent)"></path>
+        <text class="arch-flowlabel" x="740" y="190" text-anchor="middle">read</text>
+
+        <path class="arch-flow" d="M992,200 L1030,200" marker-end="url(#ah-accent)"></path>
+        <text class="arch-flowlabel" x="1012" y="190" text-anchor="middle">HTTPS</text>
+
+        {/* ---- point-in-time read back into compute ---------------------- */}
+        <path class="arch-flow--read arch-flow" d="M600,64 L600,40 L300,40 L300,60" marker-end="url(#ah-faint)"></path>
+        <text class="arch-flowlabel" x="450" y="32" text-anchor="middle">
+          point-in-time read back into compute
+        </text>
+
+        {/* ---- HMAC write-back ------------------------------------------- */}
+        <path
+          class="arch-flow arch-flow--write"
+          d="M364,410 L364,468 L876,468 L876,414"
+          marker-end="url(#ah-warn)"></path>
+        <text class="arch-flowlabel" x="620" y="460" text-anchor="middle">
+          HMAC-signed JSON write-back → /admin/v1/results (the only write path in)
+        </text>
+
+        {/* ---- annotations ------------------------------------------------ */}
+        <rect x="24" y="496" width="3" height="108" fill="var(--accent)"></rect>
+        {
+          notes.map((note, i) => (
+            <text class="arch-note" x="42" y={516 + i * 26}>
+              {note}
+            </text>
+          ))
+        }
+      </svg>
+    </div>
+
+    <div class="legend">
+      <span><i style="color:var(--accent)"></i> forward data path</span>
+      <span><i style="color:var(--warn)"></i> HMAC-signed write-back</span>
+      <span><i style="color:var(--fg-faint)"></i> point-in-time read</span>
+      <span><i style="color:var(--info)"></i> no-lookahead chokepoint</span>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="split-h">
+    <div class="panel__head">
+      <h2 id="split-h">Why the split</h2>
+      <span class="panel__note">FINDYN_V1_SPEC.md §6, §14</span>
+    </div>
+    <div class="prose">
+      <p>
+        The serving plane is edge infrastructure: cron triggers, ingestion, a D1 feature store, a
+        KV cache, an R2 archive, and a read-only Hono API. It is fast, always on, and cannot run
+        <code>numpy</code>. The compute plane is a plain Python 3.11 CLI on scheduled GitHub
+        Actions, which is where Kalman filtering, fractional differencing, the HMM, XGBoost
+        calibration, extreme-value fitting and Monte Carlo actually happen.
+      </p>
+      <p>
+        The two meet at exactly two places. The compute plane <strong>reads</strong> history out of
+        D1 through the point-in-time join, and <strong>writes</strong> its results back through a
+        single HMAC-authenticated admin endpoint. Because compute is a host-agnostic CLI, moving it
+        off GitHub Actions is a workflow change, not a rewrite.
+      </p>
+      <p>
+        This dashboard is the last box on the right and the least privileged one: a static bundle
+        with no server of its own, reading the same public API as any other client.
+      </p>
+    </div>
+  </section>
+</Base>

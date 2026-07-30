@@ -1,0 +1,16 @@
+{
+  "name": "findyn",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FinDyn v1.0 — S&P500 Dynamic State Engine. Root scripts orchestrate the dashboard build and the Worker deploy.",
+  "scripts": {
+    "install:all": "npm --prefix dashboard install && npm --prefix serving install",
+    "build": "npm --prefix dashboard run build",
+    "deploy": "npm run build && npm --prefix serving run deploy",
+    "deploy:check": "npm run build && npm --prefix serving run deploy:check",
+    "deploy:pages": "npm run build && npx wrangler pages deploy dashboard/dist --project-name findyn-dashboard",
+    "test": "npm --prefix serving test",
+    "typecheck": "npm --prefix serving run typecheck && npm --prefix dashboard run typecheck",
+    "db:migrate": "npm --prefix serving run db:migrate:remote"
+  }
+}

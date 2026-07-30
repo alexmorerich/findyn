@@ -1,0 +1,84 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="Point-in-Time"
+  description="What was actually knowable on a given date, and what existed but had not been published yet."
+  eyebrow="No-lookahead guarantee"
+  heading="Point-in-time demonstration"
+  intro="Pick a date. The left column is what a model running that morning could legitimately read. The right column is everything else — real figures, already describing the past, that nobody could see yet."
+>
+  <section class="panel" aria-labelledby="cutoff-h">
+    <div class="panel__head">
+      <h2 id="cutoff-h">Information cutoff</h2>
+      <span class="panel__note">/api/v1/pit?as_of=</span>
+    </div>
+    <div class="controls">
+      <label class="field" for="pit-date">
+        As of date
+        <input type="date" id="pit-date" name="pit-date" value="2025-03-01" />
+      </label>
+      <p class="prose" style="margin:0">
+        The snapshot is rebuilt server-side for whatever date you choose, from the same
+        <code>release_date</code> key the compute plane joins on.
+      </p>
+    </div>
+    <div id="pit-summary" style="margin-top:1rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="why-h">
+    <div class="panel__head">
+      <h2 id="why-h">Why this page exists</h2>
+      <span class="panel__note">FINDYN_V1_SPEC.md §14.1</span>
+    </div>
+    <div class="prose">
+      <p>
+        Every macro figure carries <strong>two</strong> dates. One is the period it describes —
+        January&rsquo;s inflation, the fourth quarter&rsquo;s profits. The other is the date it
+        became <strong>knowable</strong>: the morning the statistical agency actually published it,
+        typically two to eight weeks later, and later still for anything revised.
+      </p>
+      <p>
+        Most datasets store only the first. Join on that alone and a backtest quietly reads
+        January&rsquo;s inflation print on the 31st of January — a number that did not exist for
+        another two weeks. Nothing errors, no test fails, and the model looks prescient because it
+        has been handed tomorrow&rsquo;s newspaper. Every result downstream is fiction, and the
+        distortion is largest exactly where it matters most: around turning points, when revisions
+        are heaviest and the lag is longest.
+      </p>
+      <p>
+        FinDyn stores <code>obs_date</code> and <code>release_date</code> separately, and one
+        function — <code>pit_join</code> — is the only sanctioned way to read macro history in the
+        compute plane. This page runs that same rule in SQL and shows you both halves of the split:
+        what survived the cutoff, and what was correctly held back.
+      </p>
+    </div>
+  </section>
+
+  <div class="pit-cols">
+    <section class="pit-col pit-col--known" aria-labelledby="known-h">
+      <h2 id="known-h">Known on this date</h2>
+      <p class="pit-col__count" id="pit-known-count">—</p>
+      <p class="pit-col__caption">
+        Released on or before the cutoff. This is the entire information set a causal model is
+        allowed to use.
+      </p>
+      <div id="pit-known"></div>
+    </section>
+
+    <section class="pit-col pit-col--withheld" aria-labelledby="withheld-h">
+      <h2 id="withheld-h">Existed but NOT yet published</h2>
+      <p class="pit-col__count" id="pit-withheld-count">—</p>
+      <p class="pit-col__caption">
+        In the database today, describing the past — and invisible on the cutoff date. Every row
+        here is a lookahead bug that a period-only join would have introduced silently.
+      </p>
+      <div id="pit-withheld"></div>
+    </section>
+  </div>
+</Base>
+
+<script>
+  import '../scripts/pit';
+</script>

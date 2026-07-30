@@ -1,0 +1,27 @@
+---
+const NAV = [
+  { href: '/', label: 'system status' },
+  { href: '/data', label: 'macro data' },
+  { href: '/pit', label: 'point-in-time' },
+  { href: '/architecture', label: 'architecture' },
+];
+
+// Normalise so `/data` and `/data/` both mark the same tab.
+const path = Astro.url.pathname.replace(/\/+$/, '') || '/';
+---
+
+<header class="site-header">
+  <div class="site-header__inner">
+    <a class="brand" href="/">Fin<span>Dyn</span></a>
+    <span class="brand__sub">S&amp;P500 dynamic state engine</span>
+    <nav class="nav" aria-label="Primary">
+      {
+        NAV.map((item) => (
+          <a href={item.href} aria-current={path === item.href ? 'page' : undefined}>
+            {item.label}
+          </a>
+        ))
+      }
+    </nav>
+  </div>
+</header>

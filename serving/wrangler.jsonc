@@ -17,7 +17,7 @@
     {
       "binding": "DB",
       "database_name": "findyn",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "a743e814-3021-422a-9e5d-146adac85df2",
       "migrations_dir": "migrations"
     }
   ],
@@ -26,7 +26,7 @@
   "kv_namespaces": [
     {
       "binding": "CACHE",
-      "id": "0000000000000000000000000000000f"
+      "id": "595c30f879c34ad2bb7d48ff6906273d"
     }
   ],
 
@@ -55,6 +55,16 @@
     "FINDYN_ENV": "production",
     // Point-in-time information-set convention (§14.1 rule 1). One convention, everywhere.
     "INFO_SET": "t-1"
+  },
+
+  // The Astro dashboard ships as static assets on this same Worker, so the site
+  // and its API share an origin. Build it first: `cd ../dashboard && npm run build`.
+  "assets": {
+    "directory": "../dashboard/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    // API and admin routes must reach the Worker even though no asset matches.
+    "run_worker_first": ["/api/*", "/admin/*"]
   }
 
   // Secrets (set via `wrangler secret put <NAME>`, never committed — see .dev.vars.example):

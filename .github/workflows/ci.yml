@@ -24,9 +24,17 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: serving/package-lock.json
+          cache-dependency-path: |
+            serving/package-lock.json
+            dashboard/package-lock.json
 
       - run: npm ci
+
+      # The Worker serves the dashboard from its assets binding, so
+      # dashboard/dist must exist before the bundle can be validated.
+      - name: Build dashboard assets
+        working-directory: dashboard
+        run: npm ci && npm run build
 
       - name: Binding types match wrangler.jsonc
         run: |
@@ -45,6 +53,29 @@ jobs:
 
       - name: Validate deployable bundle
         run: npm run deploy:check
+
+  dashboard:
+    name: Dashboard (Astro)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
 
   compute:
     name: Compute plane (Python)

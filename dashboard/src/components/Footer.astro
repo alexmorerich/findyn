@@ -1,0 +1,25 @@
+---
+import { API_BASE, API_BASE_IS_PLACEHOLDER } from '../lib/api';
+
+// FINDYN_V1_SPEC.md §18 — verbatim, on every page.
+const DISCLAIMER =
+  'FinDyn is a market navigation system. It estimates market position, velocity, ' +
+  'acceleration, instability, and regime-transition probability. It does not claim to ' +
+  'predict the future with certainty and does not provide investment advice. Final ' +
+  'allocation decisions depend on investor constraints, risk tolerance, and tax jurisdiction.';
+---
+
+<footer class="site-footer">
+  <div class="site-footer__inner">
+    <p class="disclaimer"><strong>Disclaimer.</strong> {DISCLAIMER}</p>
+    <p class="footer-meta">
+      <span>FINDYN_V1_SPEC.md §18</span>
+      <span>API: <code>{API_BASE}/api/v1</code></span>
+      {
+        API_BASE_IS_PLACEHOLDER && (
+          <span>PUBLIC_FINDYN_API not set at build time — no API will be read.</span>
+        )
+      }
+    </p>
+  </div>
+</footer>

@@ -14,10 +14,17 @@ venv/
 .ruff_cache/
 .mypy_cache/
 *.egg-info/
+.coverage
+.coverage.*
+
+# Tooling scratch
+.playwright-mcp/
 
 # Data / artifacts (never commit raw source data or model output)
 compute/data/
 compute/artifacts/
+compute/.cache/
+.cache/
 *.sqlite
 *.sqlite3
 *.xls

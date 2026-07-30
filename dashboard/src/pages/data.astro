@@ -1,0 +1,36 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="Macro Data Explorer"
+  description="Every macro series in the FinDyn feature store, with its period, release date and freshness."
+  eyebrow="Feature store"
+  heading="Macro data explorer"
+  intro="The series backing the engine, straight from D1. Select any row to load its observations, plotted and tabulated with the dates that make a point-in-time join possible."
+>
+  <section class="panel" aria-labelledby="catalogue-h">
+    <div class="panel__head">
+      <h2 id="catalogue-h">Series catalogue</h2>
+      <span class="panel__note" id="series-count"></span>
+    </div>
+    <p class="prose">
+      <strong>Freshness</strong> compares the age of the newest observed <em>period</em> against
+      what the series&rsquo; own frequency makes normal — a quarterly figure sixty days behind is
+      on schedule, a daily one is not. Hover a badge for the threshold applied.
+    </p>
+    <div id="series-list" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="detail-h">
+    <div class="panel__head">
+      <h2 id="detail-h">Series detail</h2>
+      <span class="panel__note">/api/v1/series/&#123;id&#125;</span>
+    </div>
+    <div id="series-detail"></div>
+  </section>
+</Base>
+
+<script>
+  import '../scripts/data';
+</script>
