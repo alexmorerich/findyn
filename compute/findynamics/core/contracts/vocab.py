@@ -41,6 +41,83 @@ FACTORS: Final[tuple[str, ...]] = (
     "usd_strength",
 )
 
+#: Standard discount horizons — the tenors ``D(t, h)`` is published for.
+#:
+#: Distinct from :data:`HORIZONS`, which are *forecast* horizons (how far ahead a
+#: model is asked to speak). These are points on a curve: what a dollar at that
+#: tenor is worth today. FinMoney publishes a factor per entry; any engine that
+#: discounts a cash flow uses the same grid, so two engines cannot disagree about
+#: what "the 3y discount factor" means.
+DISCOUNT_HORIZONS: Final[tuple[str, ...]] = (
+    "1m",
+    "3m",
+    "6m",
+    "1y",
+    "2y",
+    "3y",
+    "5y",
+    "7y",
+    "10y",
+    "20y",
+    "30y",
+)
+
+#: Each discount horizon in years. ``1m`` is 1/12 of a year, not 30/360 — the
+#: horizons are curve tenors, and a curve is parameterised in years.
+DISCOUNT_HORIZON_YEARS: Final[dict[str, float]] = {
+    "1m": 1.0 / 12.0,
+    "3m": 0.25,
+    "6m": 0.5,
+    "1y": 1.0,
+    "2y": 2.0,
+    "3y": 3.0,
+    "5y": 5.0,
+    "7y": 7.0,
+    "10y": 10.0,
+    "20y": 20.0,
+    "30y": 30.0,
+}
+
+#: Prefix marking a series that is another engine's *published output* read back
+#: through the point-in-time gateway, e.g. ``ENGINE:rates.ns_level``.
+#:
+#: This is how an engine consumes another engine's work without importing it
+#: (``01-target-architecture.md`` §3 rule 2, CI-enforced). The row travels the
+#: same path as any observation — provider, ``macro_series`` shape, ``pit_join``
+#: — so it is subject to the same release-date filter, and a consumer physically
+#: cannot see an output that had not been published yet.
+ENGINE_SERIES_PREFIX: Final[str] = "ENGINE:"
+
+
+def engine_series_id(asset: str, metric: str) -> str:
+    """Series id under which ``asset``'s ``metric`` is read back."""
+    if not asset or not metric:
+        raise ValueError(f"engine_series_id needs both asset and metric, got {asset!r}/{metric!r}")
+    if asset not in ASSETS:
+        raise ValueError(f"{asset!r} is not one of {list(ASSETS)}")
+    return f"{ENGINE_SERIES_PREFIX}{asset}.{metric}"
+
+
+def parse_engine_series_id(series_id: str) -> tuple[str, str] | None:
+    """``('rates', 'ns_level')`` for an ``ENGINE:`` id, else ``None``.
+
+    ``None`` rather than an exception: callers use this to *classify* an id, and
+    "this is an ordinary provider series" is an answer, not a failure.
+    """
+    if not series_id.startswith(ENGINE_SERIES_PREFIX):
+        return None
+    body = series_id[len(ENGINE_SERIES_PREFIX) :]
+    asset, _, metric = body.partition(".")
+    if not asset or not metric:
+        raise ValueError(
+            f"malformed engine series id {series_id!r}; expected "
+            f"{ENGINE_SERIES_PREFIX}<asset>.<metric>"
+        )
+    if asset not in ASSETS:
+        raise ValueError(f"engine series id {series_id!r} names unknown asset {asset!r}")
+    return asset, metric
+
+
 #: §10 — forecast horizons.
 HORIZONS: Final[tuple[str, ...]] = (
     "tactical",

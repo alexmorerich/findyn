@@ -1,5 +1,6 @@
 ---
 import Header from '../components/Header.astro';
+import Ribbon from '../components/Ribbon.astro';
 import Footer from '../components/Footer.astro';
 import '../styles/app.css';
 
@@ -31,6 +32,7 @@ const { title, description, eyebrow, heading, intro } = Astro.props;
   <body>
     <a class="skiplink" href="#main">Skip to content</a>
     <Header />
+    <Ribbon />
     <main id="main">
       <div class="page-head">
         <p class="eyebrow">{eyebrow}</p>

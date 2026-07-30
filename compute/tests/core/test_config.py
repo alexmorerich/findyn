@@ -54,10 +54,17 @@ def test_engine_series_ids_survived_the_move_from_the_price_block():
 
 
 def test_only_engines_whose_phase_has_landed_are_enabled():
-    """An engine enabled before its models exist would publish nothing daily."""
+    """An engine enabled before its models exist would publish nothing daily.
+
+    P1 shipped rates, P2 shipped money. Equity, gold and crypto are configured
+    but disabled, which is the correct state for an engine that does not exist —
+    and the ordering is ASSETS order, not config order, so a run is deterministic.
+    """
     config = load_series_config()
-    assert config.enabled_engine_names() == ("rates",)
+    assert config.enabled_engine_names() == ("money", "rates")
     assert set(config.engines) == {"money", "rates", "equity", "gold", "crypto"}
+    for unbuilt in ("equity", "gold", "crypto"):
+        assert not config.is_enabled(unbuilt)
 
 
 def test_the_rates_engine_declares_its_curve_in_config_not_code():

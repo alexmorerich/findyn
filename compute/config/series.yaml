@@ -114,6 +114,42 @@ factors:
 # of these promotes it into `factors` rather than reaching across the boundary.
 # ---------------------------------------------------------------------------
 engines:
+  money:
+    # The numeraire's inputs. Roles are semantic — engines/money reads
+    # `short_rate_primary`, not a hard-coded series id — so re-pointing the short
+    # rate at a different series is a yaml edit.
+    #
+    # DGS3MO and RRPONTSYD are already ingested (by the rates engine and the
+    # liquidity factor respectively). Naming them again here costs nothing: every
+    # loader de-duplicates by series id (`required_series_ids`, `resolve_specs`,
+    # `configured_series` are all set-based), so the rows are fetched once and
+    # stored once. What this block declares is *which role each id plays for this
+    # engine*, which is not derivable from the fact that someone else wants it.
+    series:
+      # SOFR from 2018-04-03; the fallback carries the path before that.
+      short_rate_primary:  {id: "FRED:SOFR",      provider: fred, frequency: daily, publication_lag_days: 1}
+      # 3m bill, secondary market, DISCOUNT basis — converted to an investment
+      # yield in account.py before it enters the accrual (see its docstring).
+      short_rate_fallback: {id: "FRED:DTB3",      provider: fred, frequency: daily, publication_lag_days: 1}
+      # Constant-maturity 3m bill: already an investment yield, so this is the leg
+      # that is directly comparable with SOFR in the bill-SOFR spread.
+      bill_3m:             {id: "FRED:DGS3MO",    provider: fred, frequency: daily, publication_lag_days: 1}
+      # Overnight reverse repo take-up, in $bn — the drainable liquidity buffer.
+      rrp_volume:          {id: "FRED:RRPONTSYD", provider: fred, frequency: daily, publication_lag_days: 1}
+
+      # FinRates' fitted curve, read back as data rather than imported as code
+      # (§3 rule 2). The `engine_output` provider fetches these from the serving
+      # plane's own /assets/rates/history endpoint, so they arrive through
+      # pit_join like any other observation and carry a real release date. Absent
+      # them — first run ever, or the API unreachable — money still publishes and
+      # discounts long horizons off the flat short rate instead.
+      ns_level:     {id: "ENGINE:rates.ns_level",     provider: engine_output, frequency: daily, publication_lag_days: 0}
+      ns_slope:     {id: "ENGINE:rates.ns_slope",     provider: engine_output, frequency: daily, publication_lag_days: 0}
+      ns_curvature: {id: "ENGINE:rates.ns_curvature", provider: engine_output, frequency: daily, publication_lag_days: 0}
+      # The frozen shape parameter. Without it the published betas cannot be
+      # turned back into a curve, so it is published per date and read per date.
+      ns_lambda:    {id: "ENGINE:rates.ns_lambda",    provider: engine_output, frequency: daily, publication_lag_days: 0}
+
   rates:
     # The observable US Treasury constant-maturity curve. Every tenor is its own
     # series; which of them exist on a given day varies (holidays, and DGS1MO

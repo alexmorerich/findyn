@@ -25,7 +25,7 @@ from findynamics.data.providers.base import Provider, ProviderError
 from findynamics.data.providers.registry import KEYLESS_PROVIDERS
 from findynamics.data.quality import DataQualityReport, QualityPolicy, check_series
 from findynamics.data.vintages import repair_pre_archive_releases
-from jobs._common import base_parser, configure_logging, write_back
+from jobs._common import base_parser, chunk_on, configure_logging, write_back
 
 log = logging.getLogger("findynamics.jobs.backfill")
 
@@ -208,25 +208,16 @@ def chunk_payload(payload: dict[str, Any], batch_size: int) -> Iterator[dict[str
     per-observation, so they are small and repeating them would just re-upsert.
     Every chunk is independently idempotent, so a failure costs one chunk and a
     re-run fixes it.
+
+    The mechanics live in :func:`jobs._common.chunk_on`, because the daily job hit
+    the same wall on ``engine_output`` once a second engine shipped.
     """
-    observations = payload.get("observations") or []
-    head = {k: v for k, v in payload.items() if k != "observations"}
-
-    if not observations:
-        yield payload
-        return
-
-    for start in range(0, len(observations), batch_size):
-        chunk = (
-            dict(head)
-            if start == 0
-            else {
-                "model_version": payload.get("model_version"),
-                "generated_at": payload.get("generated_at"),
-            }
-        )
-        chunk["observations"] = observations[start : start + batch_size]
-        yield chunk
+    return chunk_on(
+        payload,
+        "observations",
+        batch_size,
+        carry=("model_version", "generated_at"),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

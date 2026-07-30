@@ -18,8 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from findynamics.core.contracts.vocab import ASSETS, HORIZONS, QUANTILES
+from findynamics.core.contracts.vocab import ASSETS, DISCOUNT_HORIZONS, HORIZONS, QUANTILES
 from findynamics.engines.equity.domain import REGIMES
+from findynamics.engines.money.domain import MONEY_REGIMES
+from findynamics.engines.rates.domain import RATE_REGIMES
 from findynamics.factors.definitions import FACTORS
 from jobs._common import sign_payload
 
@@ -43,10 +45,28 @@ def ts_string_array(name: str) -> list[str]:
         ("ASSETS", ASSETS),
         ("REGIMES", REGIMES),
         ("HORIZONS", HORIZONS),
+        ("RATE_REGIMES", RATE_REGIMES),
+        # P2. Order is the wire order for MONEY_REGIMES: `engine_output` publishes
+        # the liquidity state as its index, so a reordering here silently
+        # relabels every row the money engine has ever written.
+        ("MONEY_REGIMES", MONEY_REGIMES),
+        ("DISCOUNT_HORIZONS", DISCOUNT_HORIZONS),
     ],
 )
 def test_vocabulary_matches_the_serving_plane(name, python_value):
     assert ts_string_array(name) == list(python_value)
+
+
+def test_money_vocabulary_stays_out_of_the_shared_layer():
+    """§3 rule 2 — the liquidity states belong to engines/money, not to core.
+
+    The discount horizons *are* shared vocabulary and do live in core: every
+    engine that discounts a cash flow has to mean the same thing by "3y".
+    """
+    from findynamics.core.contracts import vocab
+
+    assert not hasattr(vocab, "MONEY_REGIMES")
+    assert hasattr(vocab, "DISCOUNT_HORIZONS")
 
 
 def test_quantiles_match_the_serving_plane():

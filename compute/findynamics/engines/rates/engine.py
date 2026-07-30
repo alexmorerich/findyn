@@ -370,6 +370,22 @@ class RatesEngine(AssetEngine):
                 if np.isfinite(value)
             )
 
+        # The frozen shape parameter, published per date alongside the betas it
+        # was fitted with. Constant within a run and therefore redundant to a
+        # human reader, but a consumer reconstructing the curve — FinMoney, or the
+        # dashboard's ghost curves — cannot evaluate the betas without it, and
+        # taking it from the newest row would misread every older one after a
+        # refit moves it.
+        rows.extend(
+            EngineOutput(
+                asset=self.name,
+                metric="ns_lambda",
+                as_of=key.date(),
+                value=round(analysis.lambda_, 6),
+            )
+            for key in factors.index
+        )
+
         # engine_output stores REALs, so the regime travels as its index in the
         # vocabulary with the label itself in `meta` for anything reading it.
         rows.extend(

@@ -1,0 +1,15 @@
+---
+// The numeraire ribbon (04-ui-plan.md §P2): the current short rate and liquidity
+// state, on every page.
+//
+// It sits under the header rather than inside it because it is data, not
+// navigation — and it renders nothing at all until the money engine has
+// published, so a page never shows an empty strip where a rate should be. The
+// script hides the host on any failure, which is why the element starts hidden.
+---
+
+<div id="numeraire" class="ribbon" hidden aria-live="polite"></div>
+
+<script>
+  import '../scripts/ribbon';
+</script>

@@ -82,6 +82,18 @@ modules = [
     "findynamics.engines.crypto",
 ]
 
+# The independence contract above already covers this pair, but P2 makes money a
+# real consumer of FinRates' output, so the specific direction gets its own named
+# contract: a failure should say "money imported rates" rather than making someone
+# work out which of five modules broke a generic independence rule. Money reads
+# the fitted curve out of `engine_output` as data instead (see
+# findynamics/data/providers/published.py).
+[[tool.importlinter.contracts]]
+name = "Money reads the rates curve as data, never as code"
+type = "forbidden"
+source_modules = ["findynamics.engines.money"]
+forbidden_modules = ["findynamics.engines.rates"]
+
 [[tool.importlinter.contracts]]
 name = "Crypto is quarantined"
 type = "forbidden"

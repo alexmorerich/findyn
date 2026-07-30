@@ -45,6 +45,39 @@ export const RATE_REGIMES = [
 ] as const;
 export type RateRegime = (typeof RATE_REGIMES)[number];
 
+/**
+ * Liquidity-state vocabulary, owned by findynamics/engines/money/domain.py.
+ *
+ * The condition of the funding market, not the level of rates. Ordered
+ * least-to-most constrained, because `engine_output` publishes the state as its
+ * index here (`liquidity_code`) and a chart of it should read upwards as
+ * conditions worsen.
+ */
+export const MONEY_REGIMES = ['abundant', 'normal', 'tightening', 'stressed'] as const;
+export type MoneyRegime = (typeof MONEY_REGIMES)[number];
+
+/**
+ * Standard discount horizons — the tenors `D(t, h)` is published for.
+ *
+ * Distinct from HORIZONS, which are *forecast* horizons. These are points on a
+ * curve, and every engine that discounts a cash flow uses this grid so that two
+ * of them cannot disagree about what "the 3y discount factor" means.
+ */
+export const DISCOUNT_HORIZONS = [
+  '1m',
+  '3m',
+  '6m',
+  '1y',
+  '2y',
+  '3y',
+  '5y',
+  '7y',
+  '10y',
+  '20y',
+  '30y',
+] as const;
+export type DiscountHorizon = (typeof DISCOUNT_HORIZONS)[number];
+
 /** §9 L2 — the five HMM regimes. */
 export const REGIMES = [
   'bull_expansion',

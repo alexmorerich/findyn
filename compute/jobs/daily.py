@@ -28,9 +28,19 @@ from findynamics.data.accessor import PandasPITAccessor
 from findynamics.data.store import load_observations, required_series_ids
 from findynamics.engines import load_engines
 from findynamics.factors.compute import compute_factors
-from jobs._common import base_parser, configure_logging, write_back
+from jobs._common import base_parser, chunk_on, configure_logging, write_back
 
 log = logging.getLogger("findynamics.jobs.daily")
+
+#: `engine_output` rows per write-back request.
+#:
+#: Each engine republishes a multi-year window of every metric it charts, so this
+#: array grows with the number of *enabled engines*, not with the day's news: P1
+#: alone sent ~7.5k rows, P2 sends ~20k, and P3-P6 will keep multiplying it.
+#: Chunking here rather than trimming the window keeps the histories intact and
+#: every request inside the Worker's CPU budget. Chunks are independently
+#: idempotent, so a failure costs one chunk and a re-run repairs it.
+ENGINE_OUTPUT_BATCH_SIZE = 5000
 
 
 def parse_as_of(value: str | None) -> date:
@@ -174,7 +184,12 @@ def run(
         out.write_text(json.dumps(payload, indent=2))
         log.info("wrote payload to %s", out)
 
-    write_back(payload, dry_run=dry_run)
+    chunks = list(chunk_on(payload, "engine_output", ENGINE_OUTPUT_BATCH_SIZE))
+    if len(chunks) > 1:
+        log.info("splitting %d output rows across %d requests", len(outputs), len(chunks))
+    for chunk in chunks:
+        write_back(chunk, dry_run=dry_run)
+
     # A partial run still publishes; the caller learns from the exit code that
     # something is missing without losing the engines that did work.
     return 3 if failed else 0

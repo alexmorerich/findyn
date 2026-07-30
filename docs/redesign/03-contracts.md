@@ -103,6 +103,45 @@ def enabled_engines(config: Config) -> list[AssetEngine]: ...
   PIT frames, emitting `FactorState`. This is Layer 0; engines never
   recompute a shared factor privately.
 
+## 4b. Cross-engine outputs — `ENGINE:` series (P2)
+
+P2 is the first phase where one engine needs another's work: FinMoney cannot
+discount past a year without FinRates' fitted curve. The independence rule
+(§3 rule 2) forbids the import, and handing over the in-memory result would be
+worse — engines run in registry order, so the producer may not have run yet, and
+a hidden ordering dependency between two supposedly independent engines is
+exactly what the rule exists to prevent.
+
+So the coupling is made explicit and turned into **data**. An engine's
+`engine_output` rows are readable back as an ordinary series under a reserved id:
+
+```
+ENGINE:<asset>.<metric>        e.g. ENGINE:rates.ns_level
+```
+
+* The id vocabulary lives in `core/contracts/vocab.py`
+  (`ENGINE_SERIES_PREFIX`, `engine_series_id`, `parse_engine_series_id`).
+* The `engine_output` **provider** (`data/providers/published.py`) fetches them
+  from the serving plane's own `/assets/:asset/history`, so they arrive through
+  `pit_join` like any observation and are subject to the same release-date
+  filter. A consumer physically cannot see an output published after its cutoff.
+* `written_at` is the row's release date — a real vintage, not a synthesized
+  lag. `data/vintages.py` skips its release-date repair for this provider
+  (`AUTHORITATIVE_RELEASE_PROVIDERS`), because a daily run republishing a
+  five-year window *is* the "bulk seeding" pattern that heuristic looks for, and
+  here that pattern is the truth.
+* Consumers declare the ids as ordinary roles in `series.yaml`, and **must
+  degrade** when they are absent: the first run of a system has no published
+  outputs at all. FinMoney falls back to a flat short rate and says so through a
+  `curve_source_degraded` signal and a confidence penalty.
+
+The producer owes consumers everything needed to interpret the metric. FinRates
+therefore publishes `ns_lambda` per date alongside the betas — three of the four
+numbers cannot be turned back into a curve.
+
+CI enforces the direction with a named contract (§5), so a violation reports
+"money imported rates" rather than a generic independence failure.
+
 ## 5. Import-linter contracts (in `compute/pyproject.toml`)
 
 ```toml
@@ -129,6 +168,12 @@ modules = [
     "findynamics.engines.gold",
     "findynamics.engines.crypto",
 ]
+
+[[tool.importlinter.contracts]]
+name = "Money reads the rates curve as data, never as code"
+type = "forbidden"
+source_modules = ["findynamics.engines.money"]
+forbidden_modules = ["findynamics.engines.rates"]
 
 [[tool.importlinter.contracts]]
 name = "Crypto is quarantined"
@@ -184,3 +229,19 @@ sent as one request it exceeds the Worker's CPU budget partway through and
 leaves a partial write with no record of where it stopped. `jobs/backfill.py`
 splits on `observations` (`--batch-size`, default 5000) and every chunk is
 independently idempotent. Per-series rows ride with the first chunk only.
+
+The daily run hit the same wall from the other direction once a second engine
+shipped. Every engine republishes a multi-year window of every metric it charts,
+so `engine_output` grows with the number of **enabled engines**, not with the
+day's news: P1 alone sent ~7.5k rows a night, P2 sends ~20k, and P3–P6 keep
+multiplying it. `jobs/daily.py` splits on `engine_output` the same way. The
+mechanics are shared in `jobs/_common.py::chunk_on`; states and factor scores are
+per-run rather than per-row, so they ride with the first chunk.
+
+**Staleness of an `AssetState` is measured in market days, not ingestion hours.**
+`isStale` (36 hours, `domain.ts`) answers "when did data last arrive", which is
+the right question for `/health` and the wrong one for an engine: an `as_of` is a
+market date, so it is a day old the moment it is published and three days old
+every Monday. The asset endpoints use `isAssetStale` (`ASSET_STALE_DAYS`, the
+same rule `/assets` already applied), so the two endpoints cannot give opposite
+answers about the same row.
