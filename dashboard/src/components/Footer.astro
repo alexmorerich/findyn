@@ -7,6 +7,13 @@ const DISCLAIMER =
   'acceleration, instability, and regime-transition probability. It does not claim to ' +
   'predict the future with certainty and does not provide investment advice. Final ' +
   'allocation decisions depend on investor constraints, risk tolerance, and tax jurisdiction.';
+
+// These pages are prerendered, so this runs with no `window` to ask. When
+// PUBLIC_FINDYN_API is unset the real origin is only knowable in the browser —
+// the API line is therefore filled in client-side below, and what is rendered
+// here is a placeholder rather than a claim. Printing the build-time answer
+// would state "no API will be read" on a page that is, in fact, reading it.
+const buildTimeOrigin = API_BASE_IS_PLACEHOLDER ? null : `${API_BASE}/api/v1`;
 ---
 
 <footer class="site-footer">
@@ -14,12 +21,15 @@ const DISCLAIMER =
     <p class="disclaimer"><strong>Disclaimer.</strong> {DISCLAIMER}</p>
     <p class="footer-meta">
       <span>FINDYN_V1_SPEC.md §18</span>
-      <span>API: <code>{API_BASE}/api/v1</code></span>
-      {
-        API_BASE_IS_PLACEHOLDER && (
-          <span>PUBLIC_FINDYN_API not set at build time — no API will be read.</span>
-        )
-      }
+      <span>API: <code id="footer-api">{buildTimeOrigin ?? 'resolving…'}</code></span>
     </p>
   </div>
 </footer>
+
+<script>
+  import { API_V1 } from '../lib/api';
+
+  // Resolved in the browser, where the origin is actually known.
+  const host = document.querySelector('#footer-api');
+  if (host) host.textContent = API_V1;
+</script>

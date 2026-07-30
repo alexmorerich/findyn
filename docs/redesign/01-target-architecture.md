@@ -129,6 +129,14 @@ produces an `AssetState`. Per-engine model roadmaps:
   discount factors D(t,h), risk-free benchmark, liquidity state. No ML.
 - **rates**: Phase 1 Nelson-Siegel (level/slope/curvature) + rule-based rate
   regimes; Phase 2 Kalman state space; Phase 3 Vasicek/CIR/Hull-White.
+  *Two different slopes, deliberately.* The published `ns_slope` factor is
+  `-b1`, which is a long-end-versus-instantaneous read of the fitted curve. The
+  regime rules do **not** branch on it: they read the empirical 10y-3m spread
+  off the same fit, because that is the spread the inversion literature is
+  written about and the one the sanity backtest asserts against. They are
+  correlated but not interchangeable — around a 2019-style inversion they can
+  disagree in sign. Both are published; anything consuming "the slope" has to
+  say which it means.
 - **equity**: `FINDYN_V1_SPEC.md` unchanged in substance — Kalman kinematics,
   FFD, 5-state HMM, XGBoost calibration, RII, crash decomposition, Monte
   Carlo. No deep-learning price prediction.

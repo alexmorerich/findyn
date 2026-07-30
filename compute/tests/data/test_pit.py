@@ -123,11 +123,21 @@ def test_negative_lag_is_rejected():
 
 
 class TestRevisionDateIsWhatMakesAFigureKnowable:
-    """release_date says when the *period* became observable; it is constant
-    across revisions of that period. Filtering on it alone would admit a later
-    revision the moment the original print was published — a value nobody could
-    have seen. FRED reissues under the same release_date, so this is not
-    hypothetical."""
+    """REGRESSION — the defect found in P1.
+
+    ``release_date`` says when the *period* became observable and is therefore
+    constant across every revision of that period. Filtering on it alone admits
+    a later revision the moment the original print is published: a value nobody
+    could have seen. FRED reissues under the same release_date and DGS10 carries
+    over 5000 vintages, so this contaminated real data, not a hypothetical.
+
+    These tests are written to fail against the old rule. That needs care: the
+    old code broke ties on release_date, which is identical across revisions, so
+    a stable sort returned whichever row happened to come first in the frame. A
+    fixture in ascending order passed by luck. Hence the row-order parametrization
+    below — the honest statement of the contract is that the answer depends on
+    the information set and on nothing else, least of all on row order.
+    """
 
     REVISED = [
         ("FRED:GDP", "2026-01-01", "2026-01-30", "2026-01-30", 100.0),
@@ -135,14 +145,38 @@ class TestRevisionDateIsWhatMakesAFigureKnowable:
         ("FRED:GDP", "2026-01-01", "2026-01-30", "2026-03-26", 102.1),
     ]
 
-    def test_a_revision_is_invisible_until_it_is_issued(self):
-        result = pit_join(vintaged(self.REVISED), "2026-02-10")
+    @pytest.mark.parametrize("order", ["ascending", "descending", "shuffled"])
+    def test_a_revision_is_invisible_until_it_is_issued(self, order):
+        rows = {
+            "ascending": self.REVISED,
+            "descending": list(reversed(self.REVISED)),
+            "shuffled": [self.REVISED[2], self.REVISED[0], self.REVISED[1]],
+        }[order]
+
+        result = pit_join(vintaged(rows), "2026-02-10")
+
+        # Only the original print had been issued by 2026-02-10.
         assert result.loc["FRED:GDP", "value"] == 100.0
+
+    @pytest.mark.parametrize("order", ["ascending", "descending"])
+    def test_the_answer_does_not_depend_on_row_order(self, order):
+        """The old rule's tie-break made this frame-order dependent."""
+        rows = self.REVISED if order == "ascending" else list(reversed(self.REVISED))
+        assert pit_join(vintaged(rows), "2026-02-10").loc["FRED:GDP", "value"] == pytest.approx(
+            pit_join(vintaged(self.REVISED), "2026-02-10").loc["FRED:GDP", "value"]
+        )
 
     def test_each_revision_appears_on_its_own_issue_date(self):
         data = vintaged(self.REVISED)
+        assert pit_join(data, "2026-02-26").loc["FRED:GDP", "value"] == 100.0
         assert pit_join(data, "2026-02-27").loc["FRED:GDP", "value"] == 101.5
+        assert pit_join(data, "2026-03-25").loc["FRED:GDP", "value"] == 101.5
         assert pit_join(data, "2026-03-26").loc["FRED:GDP", "value"] == 102.1
+
+    def test_history_hides_unissued_revisions_too(self):
+        """pit_history shares the filter; fixing one and not the other is worse."""
+        history = pit_history(vintaged(list(reversed(self.REVISED))), "2026-02-10")
+        assert list(history["value"]) == [100.0]
 
     def test_a_frame_without_revision_dates_still_works(self):
         """Sources with no vintage information are unaffected."""

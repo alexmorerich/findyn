@@ -141,14 +141,46 @@ forbidden_modules = ["findynamics.engines.crypto"]
 
 ## 6. Write-back payloads (serving `admin/writeback.ts`)
 
-Two new batch types under the existing HMAC envelope, mirroring the D1 tables
-in `01-target-architecture.md` §6:
+New batch types under the existing HMAC envelope, mirroring the D1 tables in
+`01-target-architecture.md` §6. They are **named arrays on the one envelope**,
+alongside the M1-A batches that were already there:
 
 ```jsonc
-{ "kind": "asset_state",  "rows": [ { "asset": "rates", "as_of": "2026-07-29", ... } ] }
-{ "kind": "engine_output", "rows": [ { "asset": "rates", "metric": "ns_level", "as_of": "...", "value": 4.31 } ] }
+{
+  "model_version": "rates-1.0.0",
+  "generated_at": "2026-07-30T03:00:00Z",
+  "as_of": "2026-07-29",
+
+  "factors":      [ { "force": "real_rate", "as_of": "2026-07-29", "score": 41.2,
+                      "components": { "FRED:DGS10": 38.0 } } ],
+  "asset_state":  [ { "asset": "rates", "as_of": "2026-07-29",
+                      "model_version": "rates-1.0.0", "regime": "re_steepening",
+                      "expected_return": 0.0504, "risk_score": 38.16, "confidence": 0.65,
+                      "signals": [ { "name": "curve_inversion", "value": 0.84,
+                                     "direction": 1, "note": "..." } ],
+                      "components": { "ns_level": 5.13 } } ],
+  "engine_output":[ { "asset": "rates", "metric": "ns_level",
+                      "as_of": "2026-07-29", "value": 5.13, "meta": null } ]
+}
 ```
 
-Validation mirrors the existing write-back style: reject unknown assets
-(vocabulary in `domain.ts`), reject non-finite numbers, idempotent upserts on
-the primary key.
+> **Superseded (P1).** This section originally sketched one envelope per batch
+> — `{ "kind": "asset_state", "rows": [...] }`. The implementation carries them
+> as named arrays instead, because the envelope already had `metadata` /
+> `observations` / `quality` / `ingestion` in exactly that shape: a `kind`
+> discriminator would have meant two payload formats behind one signature, and
+> a daily run that publishes factors, a state and its outputs would have needed
+> three signed requests where one does. The named-array form above is canonical.
+
+Validation mirrors the existing write-back style: reject unknown assets and
+unknown factors (vocabulary in `domain.ts`), reject non-finite numbers and
+out-of-range scores, reject a `direction` outside `-1|0|1`, and upsert
+idempotently on the primary key. `model_version` is part of the `asset_state`
+key, so a refit publishes alongside the model it replaces rather than
+overwriting it.
+
+**Chunking.** A historical backfill is hundreds of thousands of observations;
+sent as one request it exceeds the Worker's CPU budget partway through and
+leaves a partial write with no record of where it stopped. `jobs/backfill.py`
+splits on `observations` (`--batch-size`, default 5000) and every chunk is
+independently idempotent. Per-series rows ride with the first chunk only.
