@@ -1,0 +1,44 @@
+name: Compute — daily
+
+# Daily feature + state run (FINDYN_V1_SPEC.md §6).
+# The schedule is intentionally commented out until M2 lands: a cron that runs a
+# not-implemented job every day is noise, not a heartbeat.
+on:
+  workflow_dispatch:
+    inputs:
+      as_of:
+        description: "Information-set cutoff (YYYY-MM-DD). Blank = today, UTC."
+        required: false
+      dry_run:
+        description: "Compute without writing back"
+        type: boolean
+        default: true
+  # schedule:
+  #   - cron: "0 3 * * 2-6"   # 03:00 UTC, after the previous session's close
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: compute
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: compute/pyproject.toml
+      - run: pip install -e .
+      - name: Run daily state computation
+        env:
+          FINDYN_ADMIN_URL: ${{ secrets.FINDYN_ADMIN_URL }}
+          ADMIN_HMAC_SECRET: ${{ secrets.ADMIN_HMAC_SECRET }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          BLS_API_KEY: ${{ secrets.BLS_API_KEY }}
+          BEA_API_KEY: ${{ secrets.BEA_API_KEY }}
+          ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
+        run: |
+          python -m jobs.daily \
+            ${{ inputs.as_of && format('--as-of {0}', inputs.as_of) || '' }} \
+            ${{ inputs.dry_run && '--dry-run' || '' }}

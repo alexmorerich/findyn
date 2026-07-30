@@ -1,0 +1,30 @@
+# Node / Cloudflare
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Data / artifacts (never commit raw source data or model output)
+compute/data/
+compute/artifacts/
+*.sqlite
+*.sqlite3
+*.xls
+*.xlsx
+*.parquet
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

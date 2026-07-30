@@ -1,0 +1,40 @@
+name: Compute — weekly
+
+# Monte Carlo + forecast distributions (FINDYN_V1_SPEC.md §11).
+# Schedule activates with M4; until then this is manual-only.
+on:
+  workflow_dispatch:
+    inputs:
+      paths:
+        description: "Monte Carlo paths per horizon"
+        required: false
+        default: "10000"
+      dry_run:
+        description: "Compute without writing back"
+        type: boolean
+        default: true
+  # schedule:
+  #   - cron: "0 5 * * 6"   # Saturday 05:00 UTC
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: compute
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: compute/pyproject.toml
+      - run: pip install -e .
+      - name: Run Monte Carlo simulation
+        env:
+          FINDYN_ADMIN_URL: ${{ secrets.FINDYN_ADMIN_URL }}
+          ADMIN_HMAC_SECRET: ${{ secrets.ADMIN_HMAC_SECRET }}
+        run: |
+          python -m jobs.weekly \
+            ${{ inputs.dry_run && '--dry-run' || '' }}

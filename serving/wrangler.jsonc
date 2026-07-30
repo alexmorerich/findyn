@@ -1,0 +1,66 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "findyn",
+  "main": "src/index.ts",
+  // Newest date the pinned workerd binary supports. Bump alongside wrangler,
+  // never past it — a future date fails the runtime at startup.
+  "compatibility_date": "2026-07-29",
+  // Required by @cloudflare/vitest-pool-workers, which runs the suite inside workerd.
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // ---------------------------------------------------------------------
+  // Storage bindings — FINDYN_V1_SPEC.md §6 (serving plane)
+  // Run `npm run bootstrap` (see README) to create these and paste the ids.
+  // ---------------------------------------------------------------------
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "findyn",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // KV: real-time cache (VIX, SPY, yields) + last-known-good state snapshot (§14.2)
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "0000000000000000000000000000000f"
+    }
+  ],
+
+  // R2: raw source snapshots, Shiller xls, model artifacts, Monte Carlo bundles
+  "r2_buckets": [
+    {
+      "binding": "ARCHIVE",
+      "bucket_name": "findyn-archive"
+    }
+  ],
+
+  // ---------------------------------------------------------------------
+  // Cron triggers — ingestion schedule (§6 "Ingestion strategy")
+  // All times UTC. Staggered so macro releases land before the daily rollup.
+  // ---------------------------------------------------------------------
+  "triggers": {
+    "crons": [
+      "*/15 13-21 * * 1-5", // realtime KV refresh (VIX, SPY, 10y) during US market hours
+      "0 13 * * *", // daily macro sweep: FRED + Treasury (post-8:30am ET releases)
+      "30 22 * * 1-5", // daily market close: prices -> D1
+      "0 6 * * 1" // weekly slow sources: Shiller, BLS, BEA
+    ]
+  },
+
+  "vars": {
+    "FINDYN_ENV": "production",
+    // Point-in-time information-set convention (§14.1 rule 1). One convention, everywhere.
+    "INFO_SET": "t-1"
+  }
+
+  // Secrets (set via `wrangler secret put <NAME>`, never committed — see .dev.vars.example):
+  //   FRED_API_KEY, BLS_API_KEY, BEA_API_KEY, ALPHAVANTAGE_API_KEY, ADMIN_HMAC_SECRET
+
+  // Static assets for the Astro dashboard are wired at M5, once dashboard/dist exists:
+  //   "assets": { "directory": "../dashboard/dist", "binding": "ASSETS",
+  //               "not_found_handling": "404-page", "run_worker_first": ["/api/*", "/admin/*"] }
+}

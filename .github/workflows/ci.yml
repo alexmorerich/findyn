@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  serving:
+    name: Serving plane (Workers / D1)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: serving
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: serving/package-lock.json
+
+      - run: npm ci
+
+      - name: Binding types match wrangler.jsonc
+        run: |
+          npm run types
+          git diff --exit-code worker-configuration.d.ts \
+            || { echo "::error::worker-configuration.d.ts is stale — run 'npm run types' and commit"; exit 1; }
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Cron/config drift check
+        run: npm run check:crons
+
+      - name: Tests (applies D1 migrations to an isolated database)
+        run: npm test
+
+      - name: Validate deployable bundle
+        run: npm run deploy:check
+
+  compute:
+    name: Compute plane (Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: compute
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: compute/pyproject.toml
+
+      - run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Format check
+        run: ruff format --check .
+
+      - name: Tests
+        run: pytest --cov=findyn --cov-report=term-missing

@@ -1,0 +1,17 @@
+{
+  // Node-side tooling (vitest config). Separated from tsconfig.json because
+  // @cloudflare/workers-types and @types/node define incompatible globals.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["vitest.config.ts"]
+}

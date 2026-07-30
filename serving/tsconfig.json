@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    // Runtime types come from worker-configuration.d.ts (`npm run types`),
+    // which supersedes @cloudflare/workers-types.
+    "types": ["@cloudflare/vitest-pool-workers/types"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "verbatimModuleSyntax": true
+  },
+  // Worker + test scope only. vitest.config.ts runs in Node, where `node:url`'s
+  // URL type conflicts with the workers-types global; it is checked separately
+  // by tsconfig.node.json.
+  "include": ["worker-configuration.d.ts", "src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", ".wrangler"]
+}

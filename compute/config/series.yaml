@@ -1,0 +1,116 @@
+# FinDyn v1.0 — series map and point-in-time publication lags
+# Source of truth: FINDYN_V1_SPEC.md §5.2.
+#
+# publication_lag_days is the CONSERVATIVE fallback used to synthesise a
+# release_date when the source exposes no vintage (§5.2, §14.1). Where ALFRED
+# vintages exist, the real vintage wins and this value is ignored.
+# Extend this file to add series — never hard-code a series id in Python.
+
+meta:
+  spec_version: "1.0"
+  # Information-set convention applied everywhere (§14.1 rule 1).
+  info_set: "t-1"
+  # Deep-history backbone starts here (Shiller monthly).
+  history_start: "1871-01-01"
+
+price:
+  # Daily incremental updates. Free tier is 25 requests/day — daily only, never backfill.
+  primary:
+    provider: alphavantage
+    symbol: SPY
+    frequency: daily
+    publication_lag_days: 0
+  # Bulk daily history for backfill (free, no key).
+  backfill:
+    provider: stooq
+    symbol: "^spx"
+    frequency: daily
+    publication_lag_days: 0
+  # Deep monthly history, 1871+.
+  deep_history:
+    provider: shiller
+    field: real_price
+    frequency: monthly
+    publication_lag_days: 30
+  fallback:
+    # Unofficial and unstable — isolated adapter, deletable without touching callers (§5.1).
+    provider: yahoo
+    symbol: "^GSPC"
+    frequency: daily
+    publication_lag_days: 0
+
+# ---------------------------------------------------------------------------
+# Market Force State F(t) — §2.2. Each force is a 0-100 percentile score built
+# from the constituent series below (§8 step 4).
+# ---------------------------------------------------------------------------
+forces:
+  valuation:
+    weight: 1.0
+    series:
+      - {id: "SHILLER:CAPE", provider: shiller, frequency: monthly, publication_lag_days: 30, direction: -1}
+      # Excess CAPE yield = 1/CAPE - 10y real rate; derived, not fetched.
+      - {id: "DERIVED:EXCESS_CAPE_YIELD", provider: derived, frequency: monthly, publication_lag_days: 30, direction: 1}
+
+  earnings:
+    weight: 1.0
+    series:
+      - {id: "SHILLER:REAL_EPS", provider: shiller, frequency: monthly, publication_lag_days: 30, direction: 1}
+      - {id: "BEA:CORPORATE_PROFITS", provider: bea, frequency: quarterly, publication_lag_days: 60, direction: 1}
+
+  liquidity:
+    weight: 1.0
+    series:
+      - {id: "FRED:M2SL", provider: fred, frequency: monthly, publication_lag_days: 14, direction: 1}
+      - {id: "FRED:WALCL", provider: fred, frequency: weekly, publication_lag_days: 7, direction: 1}
+      - {id: "FRED:RRPONTSYD", provider: fred, frequency: daily, publication_lag_days: 1, direction: -1}
+      - {id: "FRED:NFCI", provider: fred, frequency: weekly, publication_lag_days: 7, direction: -1}
+
+  rates:
+    weight: 1.0
+    series:
+      - {id: "FRED:DGS2", provider: fred, frequency: daily, publication_lag_days: 1, direction: -1}
+      - {id: "FRED:DGS10", provider: fred, frequency: daily, publication_lag_days: 1, direction: -1}
+      - {id: "FRED:DFII10", provider: fred, frequency: daily, publication_lag_days: 1, direction: -1}
+      - {id: "FRED:T10Y2Y", provider: fred, frequency: daily, publication_lag_days: 1, direction: 1}
+      - {id: "FRED:T10Y3M", provider: fred, frequency: daily, publication_lag_days: 1, direction: 1}
+
+  credit:
+    weight: 1.0
+    series:
+      - {id: "FRED:BAMLH0A0HYM2", provider: fred, frequency: daily, publication_lag_days: 1, direction: -1}
+      - {id: "FRED:BAMLC0A0CM", provider: fred, frequency: daily, publication_lag_days: 1, direction: -1}
+      - {id: "FRED:BUSLOANS", provider: fred, frequency: weekly, publication_lag_days: 7, direction: 1}
+      - {id: "FRED:DRTSCILM", provider: fred, frequency: quarterly, publication_lag_days: 45, direction: -1}
+
+  inflation:
+    weight: 1.0
+    series:
+      - {id: "FRED:CPIAUCSL", provider: fred, frequency: monthly, publication_lag_days: 14, direction: -1}
+      - {id: "FRED:CPILFESL", provider: fred, frequency: monthly, publication_lag_days: 14, direction: -1}
+      - {id: "FRED:T5YIFR", provider: fred, frequency: daily, publication_lag_days: 1, direction: -1}
+
+  labor:
+    weight: 1.0
+    series:
+      - {id: "FRED:UNRATE", provider: fred, frequency: monthly, publication_lag_days: 7, direction: -1}
+      - {id: "FRED:PAYEMS", provider: fred, frequency: monthly, publication_lag_days: 7, direction: 1}
+      - {id: "FRED:ICSA", provider: fred, frequency: weekly, publication_lag_days: 5, direction: -1}
+      - {id: "BLS:CES0500000003", provider: bls, frequency: monthly, publication_lag_days: 7, direction: 1}
+
+  risk_appetite:
+    weight: 1.0
+    series:
+      - {id: "FRED:VIXCLS", provider: fred, frequency: daily, publication_lag_days: 1, direction: -1}
+      - {id: "FRED:STLFSI4", provider: fred, frequency: weekly, publication_lag_days: 7, direction: -1}
+      # HY - IG spread differential; derived from the credit series above.
+      - {id: "DERIVED:HY_IG_DIFFERENTIAL", provider: derived, frequency: daily, publication_lag_days: 1, direction: -1}
+
+  sentiment:
+    weight: 1.0
+    series:
+      - {id: "FRED:UMCSENT", provider: fred, frequency: monthly, publication_lag_days: 14, direction: 1}
+
+# Cached in KV with a short TTL for the dashboard's live tiles (§6).
+realtime_cache:
+  ttl_seconds: 900
+  series: ["FRED:VIXCLS", "FRED:DGS10", "PRICE:SPY"]

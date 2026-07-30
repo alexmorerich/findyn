@@ -1,0 +1,30 @@
+{
+  "name": "findyn-serving",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FinDyn v1.0 serving plane — Cloudflare Workers, D1, KV, R2 (see FINDYN_V1_SPEC.md §6)",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --persist-to=./.wrangler/state",
+    "deploy": "wrangler deploy",
+    "deploy:check": "wrangler deploy --dry-run --outdir=./.wrangler/dry-run",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "check:crons": "node scripts/check-crons.mjs",
+    "types": "wrangler types",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:migrate:local": "wrangler d1 migrations apply findyn --local",
+    "db:migrate:remote": "wrangler d1 migrations apply findyn --remote",
+    "db:list": "wrangler d1 migrations list findyn --local"
+  },
+  "dependencies": {
+    "hono": "^4.6.14"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.19.0",
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.115.0"
+  }
+}
