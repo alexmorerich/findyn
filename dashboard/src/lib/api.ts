@@ -195,6 +195,8 @@ export interface HistoryPoint {
   as_of: string;
   value: number;
   meta: unknown;
+  /** When the run that produced the row published it. Absent on older rows. */
+  written_at?: string | null;
 }
 
 export interface AssetHistory {
@@ -210,7 +212,11 @@ export interface AssetHistory {
  * engine ships — an unknown name still renders, just without the blurb.
  */
 export const ENGINE_LABELS: Record<string, { title: string; blurb: string; href?: string }> = {
-  money: { title: 'FinMoney', blurb: 'Time value — cash carry and discount factors' },
+  money: {
+    title: 'FinMoney',
+    blurb: 'Time value — cash carry, discount factors and the liquidity state',
+    href: '/money',
+  },
   rates: {
     title: 'FinRates',
     blurb: 'Interest-rate dynamics — Nelson-Siegel curve factors and rate regimes',

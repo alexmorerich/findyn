@@ -1,2 +1,107 @@
-# FinMoney — time value of money (Phase 2). Not built yet.
-enabled: false
+# FinMoney — time value of money (Phase 2).
+#
+# The numeraire the other engines discount against: a money-market account
+# compounded on the observed short rate, discount factors on the standard horizon
+# grid, and a liquidity state over the funding market.
+#
+# Nothing here is fitted. `fit` is a no-op by design — the account has no free
+# parameters, so every number the engine branches on is in this file. A rule that
+# only exists in Python is a rule nobody can recalibrate without a deploy.
+enabled: true
+
+account:
+  # ACT/360 — the basis SOFR and US Treasury bills are quoted on. Changing this
+  # rebases every wealth index and carry the engine has ever published.
+  day_count_basis: 360
+  # FRED's DTB3 is quoted on a bank-discount basis, so it is converted to an
+  # investment yield before it accrues. Untreated the error is a few basis points
+  # a year, but the pre-SOFR leg is sixty years long and it compounds one way.
+  fallback_is_discount: true
+  bill_term_days: 91
+  # A hole wider than this is not a holiday. The accrual restarts rather than
+  # paying one stale overnight rate across it, and the restart is visible in the
+  # published wealth index because a data hole should look like one.
+  max_accrual_gap_days: 40
+
+# Thresholds for the funding-market state. Calibrated against the real series
+# 2018-2026 (see findynamics/engines/money/liquidity.py for the full argument);
+# as set below, `stressed` fires on eleven sessions in eight years: 17-18 Sep 2019
+# and 4-16 Mar 2020.
+liquidity:
+  # SOFR is published a day ahead of the constant-maturity bill, so on nearly
+  # every run the newest date of the rate path has an overnight rate and no bill
+  # to compare it against. The state therefore reads the newest date that does
+  # carry a spread, up to this many calendar days back; beyond it, reverse-repo
+  # alone with lower confidence beats a week-old dislocation read.
+  max_spread_staleness_days: 5
+
+  # Observations averaged for the "sustained" spread read, and spanned by the
+  # bill / overnight trend reads. Trading days.
+  spread_window: 3
+  trend_window: 10
+  rrp_fast_window: 5
+  rrp_slow_window: 63
+
+  # A single session this far through is a repo blowout on its own: on 17 Sep 2019
+  # the overnight rate printed 5.25% against a 1.99% bill, a spread of -3.26.
+  stressed_spike_pp: -1.50
+  # Sustained dislocation gate. NOT a comfortable margin, and the comment is the
+  # warning: an ordinary easing cycle reached -0.45 on this measure in Sep 2024,
+  # and the Dec-2018 turn-of-year squeeze reached -0.52. The second leg below is
+  # what actually does the separating; widening this alone will produce false
+  # positives on every telegraphed rate cut.
+  stressed_spread_pp: -0.55
+  # The confirming leg — a sustained dislocation only counts as stress when
+  # something is moving fast behind it. Either bills are collapsing (a dash for
+  # cash: -1.20pp over ten sessions in Mar 2020)...
+  stressed_bill_drop_pp: -0.50
+  # ...or the overnight rate is climbing (a funding squeeze: +0.34pp in Sep 2019).
+  # Sep 2024 fails both legs independently, which is why it reads `tightening`.
+  stressed_sofr_jump_pp: 0.25
+
+  # Bills persistently through the overnight rate: the buffer is being used.
+  tightening_spread_pp: -0.20
+  # Reverse-repo fast average this far below its slow average.
+  tightening_rrp_ratio: 0.75
+
+  # Reverse-repo take-up below this ($bn) carries no information: 2019 ran at
+  # about $3bn, where a 50% swing is one counterparty changing its mind.
+  rrp_material_bn: 100.0
+  # Above this, with a buffer that is not shrinking, the system has more cash than
+  # it has uses for. Only ever true 2021-2024 and the weeks after Mar 2020.
+  abundant_rrp_bn: 250.0
+  abundant_rrp_ratio: 0.90
+
+risk:
+  # Cash is riskless on the shared 0-100 axis, where 100 is roughly a 10y position
+  # through 2022. The score is not "low", it is 0 — the only risk an overnight
+  # account carries is that the funding market stops working.
+  #
+  # That risk is real but bounded: it costs basis points of access, never tens of
+  # percent of principal. So it is scaled and then capped, because an uncapped
+  # scaling would have let 17 Sep 2019 publish a number that invited the portfolio
+  # layer to treat cash as an equity-like exposure for one day.
+  ceiling: 10.0
+  # Funding dislocation (negative bill-SOFR spread, pp) that maps to the ceiling.
+  dislocation_reference_pp: 1.0
+
+confidence:
+  # Three independent deductions, because they degrade three different outputs.
+  # A spliced short rate weakens the numeraire itself...
+  spliced_short_rate_penalty: 0.25
+  # ...no bill-SOFR spread leaves the regime resting on reverse-repo alone...
+  no_spread_penalty: 0.30
+  # ...and no published curve makes every horizon past 1y a flat extrapolation.
+  no_curve_penalty: 0.20
+
+real_carry:
+  # The shared inflation factor is a 0-100 percentile where 100 is most benign, so
+  # it orients the carry signal rather than being subtracted from it (the spec's
+  # "carry minus inflation score" is a type error; see _real_carry_signal).
+  inflation_benign_above: 55.0
+  inflation_hostile_below: 45.0
+
+outputs:
+  # How far back predict() republishes the per-date series. Upserts are idempotent,
+  # so a longer window costs write time, never accuracy.
+  history_days: 1825

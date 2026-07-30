@@ -29,7 +29,21 @@ SERIES_CONFIG_PATH = CONFIG_DIR / "series.yaml"
 ENGINES_CONFIG_DIR = CONFIG_DIR / "engines"
 
 VALID_PROVIDERS = frozenset(
-    {"fred", "shiller", "bls", "bea", "treasury", "alphavantage", "stooq", "yahoo", "derived"}
+    {
+        "fred",
+        "shiller",
+        "bls",
+        "bea",
+        "treasury",
+        "alphavantage",
+        "stooq",
+        "yahoo",
+        "derived",
+        # Not an external source: another engine's published output, read back
+        # from the serving plane so a consumer never imports the producer
+        # (core/contracts/vocab.py::ENGINE_SERIES_PREFIX).
+        "engine_output",
+    }
 )
 VALID_FREQUENCIES = FREQUENCIES
 

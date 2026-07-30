@@ -1,0 +1,96 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="FinMoney"
+  description="The money-market account, trailing cash carry, discount factors and the funding-market liquidity state, from the FinDynamics money engine."
+  eyebrow="Asset engine"
+  heading="FinMoney — time value"
+  intro="One dollar rolled overnight, forever. This engine has no model and nothing fitted: it compounds the observed short rate, discounts the standard horizons against it, and reads whether the funding market is clearing. It is the numeraire the other engines discount against. Everything on this page is read from the live API by your browser."
+>
+  <section class="panel" aria-labelledby="state-h">
+    <div class="panel__head">
+      <h2 id="state-h">Current state</h2>
+      <span class="panel__note">/api/v1/assets/money/state</span>
+    </div>
+    <div id="money-state"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="liquidity-h">
+    <div class="panel__head">
+      <h2 id="liquidity-h">Liquidity state</h2>
+      <span class="panel__note">AssetState.regime + its component spreads</span>
+    </div>
+    <p class="prose">
+      The condition of the funding market, not the level of rates. It is read from two things: the
+      3-month bill against the overnight rate, and how the reverse-repo buffer is trending. The hard
+      part is that an ordinary easing cycle pushes bills below repo for a completely benign
+      reason &mdash; so <code>stressed</code> also requires something to be moving fast behind the
+      dislocation, either bills being scrambled for or repo repricing.
+    </p>
+    <div id="money-liquidity" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="wealth-h">
+    <div class="panel__head">
+      <h2 id="wealth-h">Wealth index</h2>
+      <span class="panel__note">/api/v1/assets/money/history?metric=wealth_index</span>
+    </div>
+    <p class="prose">
+      What one dollar invested at the base date is worth now, compounded on the point-in-time short
+      rate at ACT/360. The rate observed for a date earns over the period <em>beginning</em> that
+      date, so nothing here is paid at a rate published afterwards; weekends accrue at
+      Friday&rsquo;s rate, because cash does not stop earning when the desk shuts.
+    </p>
+    <div id="money-wealth" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="carry-h">
+    <div class="panel__head">
+      <h2 id="carry-h">Trailing carry</h2>
+      <span class="panel__note">AssetState.components &middot; carry_1m / 3m / 12m</span>
+    </div>
+    <p class="prose">
+      What cash actually earned over each trailing window, annualized &mdash; realized, not
+      forecast. Stated as the constant continuously-compounded ACT/360 rate that would have
+      produced the observed growth, which is the exact inverse of the accrual: over a stretch where
+      the short rate never moved, the carry equals that rate to the last decimal. A window the data
+      does not reach back far enough to cover is shown as absent rather than estimated from a
+      shorter one.
+    </p>
+    <div id="money-carry" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="discount-h">
+    <div class="panel__head">
+      <h2 id="discount-h">Discount-factor curve</h2>
+      <span class="panel__note">AssetState.components &middot; discount_*</span>
+    </div>
+    <p class="prose">
+      What a dollar at each horizon is worth today, continuously compounded. Inside a year the curve
+      is the observed short rate extrapolated flat &mdash; an assumption, and labelled as one.
+      Beyond a year it is FinRates&rsquo; fitted Nelson-Siegel curve, read out of the published
+      engine outputs rather than recomputed here. Where no fitted curve is in the information set,
+      the long end falls back to the same flat short rate and every affected point says so.
+    </p>
+    <div id="money-discount" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="signals-h">
+    <div class="panel__head">
+      <h2 id="signals-h">Signals</h2>
+      <span class="panel__note">AssetState.signals</span>
+    </div>
+    <p class="prose">
+      Direction is the signal&rsquo;s read on funding conditions, not on the direction of the number
+      itself: bills rich to repo counts as adverse even though a spread going negative is just a
+      number going down.
+    </p>
+    <div id="money-signals" style="margin-top:0.85rem"></div>
+  </section>
+</Base>
+
+<script>
+  import '../scripts/money';
+</script>

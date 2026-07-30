@@ -44,6 +44,18 @@ from findynamics.data.providers.base import Observation, synthesize_release_date
 
 log = logging.getLogger("findynamics.data.vintages")
 
+#: Providers whose release dates need no repair because they are true by
+#: construction rather than reported by an archive.
+#:
+#: ``engine_output`` is the case that forces this to be explicit. Its rows come
+#: from our own daily run, which republishes a five-year window every night — so
+#: hundreds of periods genuinely do share one publication date, and every one of
+#: them genuinely does predate it. That is precisely the "bulk seeding" pattern
+#: below, and here it is the truth rather than bookkeeping. Repairing it would
+#: replace real publication dates with a synthesized lag and license a consumer
+#: to read a curve factor at a cutoff before the run that produced it existed.
+AUTHORITATIVE_RELEASE_PROVIDERS = frozenset({"engine_output"})
+
 
 def archive_epoch(observations: Iterable[Observation]) -> date | None:
     """Earliest release date present — the archive's own start for this series."""
@@ -77,6 +89,8 @@ def repair_pre_archive_releases(
     """
     rows = list(observations)
     if not rows:
+        return rows
+    if spec.provider in AUTHORITATIVE_RELEASE_PROVIDERS:
         return rows
 
     epoch = archive_epoch(rows)

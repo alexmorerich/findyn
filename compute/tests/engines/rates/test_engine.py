@@ -13,7 +13,7 @@ from datetime import date
 import pytest
 
 from findynamics.core.contracts.state import AssetState
-from findynamics.engines.rates.domain import RATE_REGIMES, regime_code
+from findynamics.engines.rates.domain import RATE_METRICS, RATE_REGIMES, regime_code
 from findynamics.engines.rates.engine import (
     InsufficientCurveDataError,
     RatesEngine,
@@ -172,15 +172,30 @@ class TestPredict:
 
 
 class TestOutputs:
-    def test_publishes_the_four_factors_and_the_regime_per_date(self, monthly_engine):
+    def test_publishes_the_factors_lambda_and_the_regime_per_date(self, monthly_engine):
         observations = synthetic_curve_frame([(4.0, -1.5, 2.0)] * 60)
         world = world_from(observations, date(2020, 6, 1))
 
         rows = monthly_engine.outputs(world)
 
         metrics = {row.metric for row in rows}
-        assert metrics == {"ns_level", "ns_slope", "ns_curvature", "ns_rmse", "regime_code"}
+        assert metrics == set(RATE_METRICS)
         assert all(row.asset == "rates" for row in rows)
+
+    def test_lambda_is_published_so_consumers_can_rebuild_the_curve(self, monthly_engine):
+        """The three betas are meaningless without the shape parameter.
+
+        P2's money engine reads these four metrics back out of `engine_output` to
+        discount past a year, and it has no other way to learn lambda — importing
+        this engine is what the independence contract forbids.
+        """
+        observations = synthetic_curve_frame([(4.0, -1.5, 2.0)] * 60)
+        rows = monthly_engine.outputs(world_from(observations, date(2020, 6, 1)))
+
+        lambdas = [r for r in rows if r.metric == "ns_lambda"]
+        levels = [r for r in rows if r.metric == "ns_level"]
+        assert len(lambdas) == len(levels), "every published factor date carries its lambda"
+        assert {r.value for r in lambdas} == {round(monthly_engine.lambda_, 6)}
 
     def test_regime_rows_carry_the_label_in_meta(self, monthly_engine):
         """engine_output stores REALs, so the name travels alongside the code."""

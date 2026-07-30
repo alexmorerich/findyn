@@ -13,6 +13,7 @@ from findynamics.data.providers.base import (
     SeriesMetadata,
     synthesize_release_date,
 )
+from findynamics.data.providers.published import PublishedOutputProvider, resolve_api_base
 from findynamics.data.providers.registry import (
     KEYLESS_PROVIDERS,
     NETWORK_PROVIDERS,
@@ -30,9 +31,11 @@ __all__ = [
     "Observation",
     "Provider",
     "ProviderError",
+    "PublishedOutputProvider",
     "SeriesMetadata",
     "available_providers",
     "build_provider",
     "build_transport",
+    "resolve_api_base",
     "synthesize_release_date",
 ]

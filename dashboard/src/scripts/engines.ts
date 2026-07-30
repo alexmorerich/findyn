@@ -17,13 +17,26 @@ import { ENGINE_LABELS, getAssets, type ApiResult, type AssetList, type AssetSum
 import { badge, el, failureBlock, loadingBlock, replace } from '../lib/dom';
 import { formatDays, formatValue, type Tone } from '../lib/format';
 
-/** Regime names carry a reading; the colour must not invent one of its own. */
+/**
+ * Regime names carry a reading; the colour must not invent one of its own.
+ *
+ * One table across engines, keyed by the regime name itself. The vocabularies are
+ * disjoint by construction (each engine owns its own, per 03-contracts.md §1), so
+ * there is no collision to disambiguate — and an unknown name falls through to
+ * `info` rather than being coloured by guesswork.
+ */
 const REGIME_TONE: Record<string, Tone> = {
+  // rates
   inverted: 'bad',
   re_steepening: 'warn',
   flat: 'idle',
   steep_tightening: 'warn',
   steep_easing: 'ok',
+  // money — the condition of the funding market, not the level of rates
+  abundant: 'ok',
+  normal: 'idle',
+  tightening: 'warn',
+  stressed: 'bad',
 };
 
 export function regimeTone(regime: string | null): Tone {

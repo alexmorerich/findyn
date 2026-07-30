@@ -614,8 +614,10 @@ function renderSignals(state: AssetState | null): void {
     el(
       'tr',
       {},
-      el('td', { class: 'mono' }, signal.name),
-      el('td', { class: 'num mono' }, formatValue(signal.value)),
+      // `nowrap`: td.mono breaks anywhere so long series ids fit elsewhere, which
+      // here splits `term_premium_trend` across two lines and reads as a typo.
+      el('td', { class: 'mono nowrap' }, signal.name),
+      el('td', { class: 'num mono nowrap' }, formatValue(signal.value)),
       el(
         'td',
         {},

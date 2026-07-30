@@ -47,10 +47,38 @@ export interface HistoryPoint {
   as_of: string;
   value: number;
   meta: unknown;
+  /**
+   * When the run that produced this row published it — the row's true vintage.
+   *
+   * Exposed because the compute plane reads these series back as another
+   * engine's input (P2: FinMoney discounts long horizons off FinRates' published
+   * curve). Point-in-time correctness there needs the *publication* date, not the
+   * date the value describes; without it a consumer would have to synthesize a
+   * lag and could read a factor at a cutoff before the run that computed it.
+   */
+  written_at: string | null;
 }
 
 /** An engine that has not published in this long is not reporting. */
 export const ASSET_STALE_DAYS = 5;
+
+/**
+ * Whether an engine's published `as_of` counts as stale.
+ *
+ * Deliberately *not* the `isStale` used by the ingestion endpoints. That one
+ * measures hours since data arrived, which is the right question for a feed;
+ * an `AssetState.as_of` is a **market date**, and a market date is a day old the
+ * moment it is published and three days old every Monday. Measuring it in hours
+ * flagged every healthy run as stale — including the run that had just finished
+ * — and left `/assets` and `/assets/:asset/state` giving opposite answers about
+ * the same row.
+ *
+ * Same rule as `listAssets` now, so they cannot disagree.
+ */
+export function isAssetStale(asOf: string | null | undefined, now = new Date()): boolean {
+  const days = daysSince(asOf ?? null, now);
+  return days === null || days > ASSET_STALE_DAYS;
+}
 
 interface StateRow {
   asset: string;
@@ -196,17 +224,22 @@ export async function getHistory(
   bindings.push(limit);
 
   const { results } = await env.DB.prepare(
-    `SELECT as_of, value, meta FROM engine_output
+    `SELECT as_of, value, meta, written_at FROM engine_output
       WHERE ${conditions.join(' AND ')}
       ORDER BY as_of DESC
       LIMIT ?`,
   )
     .bind(...bindings)
-    .all<{ as_of: string; value: number; meta: string | null }>();
+    .all<{ as_of: string; value: number; meta: string | null; written_at: string | null }>();
 
   // Ascending on the way out: a chart wants time to move left to right, and the
   // DESC + LIMIT above is only there to make "the most recent N" cheap.
   return (results ?? [])
-    .map((r) => ({ as_of: r.as_of, value: r.value, meta: parseJson<unknown>(r.meta, null) }))
+    .map((r) => ({
+      as_of: r.as_of,
+      value: r.value,
+      meta: parseJson<unknown>(r.meta, null),
+      written_at: r.written_at ?? null,
+    }))
     .reverse();
 }

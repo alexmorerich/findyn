@@ -1012,6 +1012,97 @@ a.enginecard__title {
   );
 }
 
+/* ------------------------------------------------- numeraire ribbon (P2) */
+
+/* Sticky under the header, so the numeraire stays visible while reading a page
+   about something else. `hidden` on the host is what keeps it absent entirely
+   until the money engine has published (04-ui-plan.md §P2). */
+.ribbon {
+  position: sticky;
+  top: 0;
+  z-index: 9;
+  border-bottom: 1px solid var(--border);
+  background: rgba(11, 15, 20, 0.94);
+  backdrop-filter: blur(6px);
+}
+.ribbon[hidden] {
+  display: none;
+}
+
+.ribbon__inner {
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 0.4rem 1.1rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.7rem;
+  font-size: 0.82rem;
+}
+
+.ribbon__rate,
+.ribbon__liquidity {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  text-decoration: none;
+  color: inherit;
+  border-radius: var(--radius);
+  padding: 0.1rem 0.25rem;
+}
+.ribbon__rate:hover,
+.ribbon__liquidity:hover {
+  background: var(--bg-sunken);
+}
+
+.ribbon__label {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  color: var(--fg-faint);
+  text-transform: lowercase;
+}
+
+.ribbon__value {
+  font-family: var(--mono);
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.ribbon__sep {
+  color: var(--border-strong);
+}
+
+.ribbon__detail {
+  font-size: 0.74rem;
+  color: var(--fg-faint);
+}
+
+/* Pushed to the right so the ribbon reads left-to-right as data, then date. */
+.ribbon__asof {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--fg-faint);
+}
+
+/* A badge sitting inline with a caption — the liquidity hero on /money. */
+.badgerow {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.85rem;
+}
+
+/* A plotted point whose value rests on an assumption (the flat short-rate
+   extrapolation) rather than on a fitted curve. Hollow, so the distinction
+   survives greyscale printing and does not rely on colour alone. */
+.chart .point--assumed {
+  fill: var(--bg-sunken);
+  stroke: var(--fg-faint);
+  stroke-width: 1.5;
+}
+
 .explain {
   margin-top: 0.9rem;
   border: 1px solid var(--border);

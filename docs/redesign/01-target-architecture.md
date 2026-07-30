@@ -197,7 +197,7 @@ Existing endpoints stay. New namespace, same envelope
 |---|---|
 | `GET /api/v1/assets` | Registered engines + status/staleness |
 | `GET /api/v1/assets/:asset/state` | Latest `AssetState` |
-| `GET /api/v1/assets/:asset/history?metric=` | `engine_output` time series |
+| `GET /api/v1/assets/:asset/history?metric=` | `engine_output` time series, each point carrying its `written_at` |
 | `GET /api/v1/factors` | Factor scores + component breakdowns (generalizes `/forces`) |
 | `GET /api/v1/portfolio` | Portfolio engine output (Phase 6) |
 
@@ -219,7 +219,7 @@ per `config/engines/*.yaml`, so shipping a new engine never edits job code.
 |---|---|---|
 | P0 | Package restructure + core contracts + registry + import-linter | All existing tests pass from new paths; CI enforces layer rules |
 | P1 | FinRates MVP | NS factors in D1, `/assets/rates/state` live, dashboard page, PIT replay test for rates |
-| P2 | FinMoney | Carry/discount factors published; rates engine consumes its benchmark via WorldState |
+| P2 | FinMoney | Carry/discount factors published; the money engine consumes the rates curve via WorldState |
 | P3 | FinEquity | FINDYN_V1_SPEC M2–M4 delivered inside `engines/equity` |
 | P4 | FinGold | Regime + hedge score, backtested against 2008/2020 stress windows |
 | P5 | FinCrypto | Isolated research module; import quarantine verified in CI |

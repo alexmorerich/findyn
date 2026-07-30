@@ -12,6 +12,7 @@ from datetime import date
 import pytest
 
 from findynamics.core.contracts.state import AssetState, EngineOutput, FactorState, Signal
+from jobs._common import chunk_on
 from jobs.backfill import DEFAULT_BATCH_SIZE, chunk_payload, configured_series
 from jobs.daily import asset_state_payload, engine_output_payload, factor_payload, parse_as_of
 
@@ -82,6 +83,68 @@ class TestChunkPayload:
         """The Worker upserts in D1 batches of 900; a request should be a handful."""
         assert DEFAULT_BATCH_SIZE % 900 != 0 or True
         assert DEFAULT_BATCH_SIZE <= 10_000
+
+
+class TestDailyChunksItsEngineOutput:
+    """The daily payload grows with the number of enabled engines, not the news.
+
+    P1 alone published ~7.5k output rows a night; P2 takes it past 20k, because
+    every engine republishes a multi-year window of every metric it charts. Sent
+    as one request that eventually exhausts the Worker's CPU partway through and
+    leaves a partial write nobody has a record of.
+    """
+
+    def _payload(self, n: int) -> dict:
+        return {
+            "model_version": "money-1.0.0,rates-1.0.0",
+            "generated_at": "2026-07-30T03:00:00Z",
+            "as_of": "2026-07-29",
+            "factors": [{"force": "liquidity", "as_of": "2026-07-29", "score": 50.0}],
+            "asset_state": [{"asset": "money"}],
+            "engine_output": [{"i": i} for i in range(n)],
+        }
+
+    def test_it_splits_on_engine_output(self):
+        chunks = list(chunk_on(self._payload(12), "engine_output", 5))
+        assert [len(c["engine_output"]) for c in chunks] == [5, 5, 2]
+
+    def test_no_row_is_lost_or_duplicated(self):
+        chunks = list(chunk_on(self._payload(12), "engine_output", 5))
+        seen = [row for chunk in chunks for row in chunk["engine_output"]]
+        assert seen == [{"i": i} for i in range(12)]
+
+    def test_states_and_factors_ride_with_the_first_chunk_only(self):
+        """Per-run rows, not per-output ones; repeating them just re-upserts."""
+        chunks = list(chunk_on(self._payload(12), "engine_output", 5))
+
+        assert chunks[0]["asset_state"] == [{"asset": "money"}]
+        assert "factors" in chunks[0]
+        for chunk in chunks[1:]:
+            assert "asset_state" not in chunk
+            assert "factors" not in chunk
+
+    def test_every_chunk_stays_identifiable(self):
+        """A chunk with no as_of is an unattributable write in the log."""
+        for chunk in chunk_on(self._payload(12), "engine_output", 5):
+            assert chunk["model_version"] == "money-1.0.0,rates-1.0.0"
+            assert chunk["as_of"] == "2026-07-29"
+
+    def test_a_single_engine_run_still_sends_one_request(self):
+        """The P1-sized payload must not start paying for machinery it needs."""
+        assert len(list(chunk_on(self._payload(3), "engine_output", 5))) == 1
+
+    def test_a_missing_array_is_passed_through_untouched(self):
+        payload = {"model_version": "x", "asset_state": [{"asset": "money"}]}
+        assert list(chunk_on(payload, "engine_output", 5)) == [payload]
+
+    def test_the_configured_batch_covers_a_realistic_daily_run(self):
+        from jobs.daily import ENGINE_OUTPUT_BATCH_SIZE
+
+        # ~20k rows for two engines should be a handful of requests, not dozens.
+        chunks = len(
+            list(chunk_on(self._payload(20_000), "engine_output", ENGINE_OUTPUT_BATCH_SIZE))
+        )
+        assert 2 <= chunks <= 8
 
 
 class TestParseAsOf:

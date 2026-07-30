@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -76,6 +77,41 @@ def write_back(payload: dict[str, Any], *, dry_run: bool = False) -> None:
     )
     response.raise_for_status()
     log.info("wrote back %d bytes -> %s", len(body), response.status_code)
+
+
+def chunk_on(
+    payload: dict[str, Any],
+    key: str,
+    batch_size: int,
+    *,
+    carry: tuple[str, ...] = ("model_version", "generated_at", "as_of"),
+) -> Iterator[dict[str, Any]]:
+    """Split ``payload`` into requests the serving plane can absorb, on one array.
+
+    The Worker upserts in D1 batches inside a single request, so a payload large
+    enough eventually runs out of CPU partway through and leaves a partial write
+    with no record of where it stopped. Every chunk is independently idempotent —
+    all these tables upsert on their primary key — so a failure costs one chunk
+    and a re-run repairs it.
+
+    The first chunk carries the whole payload; later chunks carry only ``carry``
+    plus their slice. Everything else in the envelope (the states, the factor
+    scores) is small and per-run rather than per-row, so repeating it in every
+    chunk would just re-upsert the same handful of rows.
+
+    Yields the payload unchanged when ``key`` is absent or already small enough,
+    which keeps the single-request case exactly as it was.
+    """
+    rows = payload.get(key) or []
+    if len(rows) <= batch_size:
+        yield payload
+        return
+
+    head = {k: v for k, v in payload.items() if k != key}
+    for start in range(0, len(rows), batch_size):
+        chunk = dict(head) if start == 0 else {k: payload[k] for k in carry if k in payload}
+        chunk[key] = rows[start : start + batch_size]
+        yield chunk
 
 
 def not_yet(milestone: str, section: str) -> int:

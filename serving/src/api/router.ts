@@ -1,7 +1,10 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { Env } from '../types';
-import { envelope, isStale, notImplemented } from '../lib/responses';
+// `isStale` is not imported here any more: it measures hours since ingestion,
+// which is the right question for /health (where it still lives) and the wrong
+// one for a market date. The asset endpoints use isAssetStale instead.
+import { envelope, notImplemented } from '../lib/responses';
 import { getHealth } from './health';
 import { getObservations, getSeriesMetadata, listSeries } from './series';
 import { InvalidDateError, pitSnapshot } from './pit';
@@ -10,10 +13,19 @@ import {
   assertKnownAsset,
   getAssetState,
   getHistory,
+  isAssetStale,
   listAssets,
   listMetrics,
 } from './assets';
-import { ASSETS, FORCES, HORIZONS, RATE_REGIMES, REGIMES } from '../domain';
+import {
+  ASSETS,
+  DISCOUNT_HORIZONS,
+  FORCES,
+  HORIZONS,
+  MONEY_REGIMES,
+  RATE_REGIMES,
+  REGIMES,
+} from '../domain';
 
 /**
  * Which phase delivers each engine, for the 501 an unpublished engine returns.
@@ -53,6 +65,8 @@ api.get('/meta', (c) =>
         horizons: HORIZONS,
         assets: ASSETS,
         rate_regimes: RATE_REGIMES,
+        money_regimes: MONEY_REGIMES,
+        discount_horizons: DISCOUNT_HORIZONS,
       },
     }),
   ),
@@ -159,7 +173,8 @@ api.get('/assets/:asset/state', async (c) => {
     envelope(state, {
       as_of: state.as_of,
       model_version: state.model_version,
-      stale: isStale(state.as_of),
+      // Engine dates are market dates, not ingestion timestamps — see isAssetStale.
+      stale: isAssetStale(state.as_of),
     }),
   );
 });
@@ -198,7 +213,7 @@ api.get('/assets/:asset/history', async (c) => {
   return c.json(
     envelope(
       { asset, metric, count: points.length, points },
-      { as_of: newest, stale: isStale(newest) },
+      { as_of: newest, stale: isAssetStale(newest) },
     ),
   );
 });

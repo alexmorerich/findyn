@@ -40,11 +40,19 @@ RATE_REGIMES: Final[tuple[str, ...]] = (
 )
 
 #: The wide metrics FinRates publishes per date (``engine_output.metric``).
+#:
+#: ``ns_lambda`` is published even though it is frozen and identical on every
+#: date, because the three betas are meaningless without it: a consumer holding
+#: level, slope and curvature cannot evaluate the curve at a maturity it was not
+#: given. Publishing it per date rather than once is what makes the history
+#: self-describing — a date's factors travel with the lambda they were fitted at,
+#: so a refit that moves lambda cannot silently reinterpret older rows.
 RATE_METRICS: Final[tuple[str, ...]] = (
     "ns_level",
     "ns_slope",
     "ns_curvature",
     "ns_rmse",
+    "ns_lambda",
     "regime_code",
 )
 
