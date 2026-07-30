@@ -1,0 +1,3 @@
+# FinCrypto — experimental (Phase 5). Not built yet, and quarantined from the
+# portfolio engine unless explicitly configured in.
+enabled: false

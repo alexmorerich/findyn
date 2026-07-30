@@ -100,5 +100,8 @@ jobs:
       - name: Format check
         run: ruff format --check .
 
+      - name: Layer rules
+        run: lint-imports
+
       - name: Tests
-        run: pytest --cov=findyn --cov-report=term-missing
+        run: pytest --cov=findynamics --cov-report=term-missing

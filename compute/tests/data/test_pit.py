@@ -5,7 +5,12 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from findyn.pit import LookaheadError, assert_no_lookahead, pit_join, synthesize_release_date
+from findynamics.data.pit import (
+    LookaheadError,
+    assert_no_lookahead,
+    pit_join,
+    synthesize_release_date,
+)
 
 
 def frame(rows: list[tuple[str, str, str, float]]) -> pd.DataFrame:

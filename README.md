@@ -132,19 +132,24 @@ findyn/
 │   ├── scripts/                 # bootstrap.sh, check-crons.mjs
 │   ├── src/
 │   │   ├── index.ts             # fetch + scheduled entrypoints
-│   │   ├── domain.ts            # regimes, forces, horizons, disclaimer
+│   │   ├── domain.ts            # assets, regimes, forces, horizons, disclaimer
 │   │   ├── api/                 # public read API
 │   │   ├── admin/               # HMAC-authenticated compute write-back
 │   │   ├── ingest/              # cron dispatch, ingestion logging
 │   │   ├── providers/           # one isolated adapter per source
 │   │   └── lib/                 # response envelope, staleness
 │   └── test/                    # vitest, runs inside workerd
-├── compute/                     # Python 3.11 · models
-│   ├── config/series.yaml       # series map + publication lags
-│   ├── findyn/
-│   │   ├── pit.py               # point-in-time joins — the no-lookahead choke point
-│   │   ├── config.py            # strict config validation
-│   │   └── domain.py            # vocabulary mirrored from serving/src/domain.ts
+├── compute/                     # Python 3.11 · models (docs/redesign/01-target-architecture.md)
+│   ├── config/
+│   │   ├── series.yaml          # factors + engine series maps, publication lags
+│   │   └── engines/             # one yaml per engine (enable flags, params)
+│   ├── findynamics/
+│   │   ├── core/                # contracts, AssetEngine, registries, config
+│   │   ├── data/                # providers, pit.py (no-lookahead choke point), quality
+│   │   ├── factors/             # Layer 0 — shared risk factors
+│   │   ├── engines/             # money · rates · equity · gold · crypto (isolated)
+│   │   ├── portfolio/
+│   │   └── backtest/
 │   ├── jobs/                    # backfill · daily · weekly · monthly_refit
 │   └── tests/
 ├── dashboard/                   # Astro (M5)
@@ -193,7 +198,7 @@ Raw price → gap/outlier handling → CAUSAL filtering → fractional different
 4. **Force scores**: winsorized z-scores → expanding-window percentile → 0–100.
 
 > **Savitzky–Golay is a lookahead trap.** Its centered window reads data after *t*. It is
-> permitted in the dashboard display layer and forbidden everywhere else; `findyn/features/`
+> permitted in the dashboard display layer and forbidden everywhere else; `findynamics/engines/equity/features/`
 > must not import it. This was corrected during design review — the original plan had it in
 > the feature pipeline, which would have silently inflated every backtest.
 
@@ -275,7 +280,7 @@ instruments. It is a mapping table, not a recommendation.
 
 1. Every value at date *t* uses only information with `release_date ≤ t`; one convention
    (`INFO_SET = "t-1"`) applied everywhere.
-2. All macro reads go through `compute/findyn/pit.py::pit_join`. Nothing else may touch
+2. All macro reads go through `compute/findynamics/data/pit.py::pit_join`. Nothing else may touch
    `macro_series`.
 3. No centered filters or windows in the feature path.
 4. Expanding-window walk-forward fitting; purged K-fold CV with a 6-month embargo; FFD `d`

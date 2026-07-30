@@ -1,9 +1,21 @@
 /**
  * Shared domain vocabulary. Every name here is fixed by FINDYN_V1_SPEC.md —
  * changing one is a schema change, not a refactor.
+ *
+ * The compute plane splits this across three modules (core/contracts/vocab.py,
+ * factors/definitions.py, engines/equity/domain.py); serving keeps one flat
+ * file. compute/tests/test_domain.py is the seam and fails on any drift.
  */
 
-/** §2.2 — Market Force State F(t). */
+/** The five asset engines (docs/redesign/01-target-architecture.md §1). */
+export const ASSETS = ['money', 'rates', 'equity', 'gold', 'crypto'] as const;
+export type Asset = (typeof ASSETS)[number];
+
+/**
+ * §2.2 — the shared risk factors. Named FORCES here (and `force_scores` in D1)
+ * because renaming the table is not worth the churn; the compute plane calls
+ * them factors.
+ */
 export const FORCES = [
   'valuation',
   'earnings',

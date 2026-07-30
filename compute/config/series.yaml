@@ -1,5 +1,9 @@
-# FinDyn v1.0 — series map and point-in-time publication lags
+# FinDynamics — series map and point-in-time publication lags
 # Source of truth: FINDYN_V1_SPEC.md §5.2.
+#
+# Three blocks: `meta`, the shared `factors` (Layer 0, owned by no engine) and
+# `engines.<name>.series` for engine-private series. Per-engine enable flags and
+# parameters live in config/engines/<name>.yaml.
 #
 # publication_lag_days is the CONSERVATIVE fallback used to synthesise a
 # release_date when the source exposes no vintage (§5.2, §14.1). Where ALFRED
@@ -13,37 +17,12 @@ meta:
   # Deep-history backbone starts here (Shiller monthly).
   history_start: "1871-01-01"
 
-price:
-  # Daily incremental updates. Free tier is 25 requests/day — daily only, never backfill.
-  primary:
-    provider: alphavantage
-    symbol: SPY
-    frequency: daily
-    publication_lag_days: 0
-  # Bulk daily history for backfill (free, no key).
-  backfill:
-    provider: stooq
-    symbol: "^spx"
-    frequency: daily
-    publication_lag_days: 0
-  # Deep monthly history, 1871+.
-  deep_history:
-    provider: shiller
-    field: real_price
-    frequency: monthly
-    publication_lag_days: 30
-  fallback:
-    # Unofficial and unstable — isolated adapter, deletable without touching callers (§5.1).
-    provider: yahoo
-    symbol: "^GSPC"
-    frequency: daily
-    publication_lag_days: 0
-
 # ---------------------------------------------------------------------------
-# Market Force State F(t) — §2.2. Each force is a 0-100 percentile score built
-# from the constituent series below (§8 step 4).
+# Shared risk factors — §2.2 (v1 called them "forces"). Each factor is a 0-100
+# percentile score built from the constituent series below (§8 step 4).
+# Global: computed once per run and handed to every engine via WorldState.
 # ---------------------------------------------------------------------------
-forces:
+factors:
   valuation:
     weight: 1.0
     series:
@@ -109,6 +88,39 @@ forces:
     weight: 1.0
     series:
       - {id: "FRED:UMCSENT", provider: fred, frequency: monthly, publication_lag_days: 14, direction: 1}
+
+# ---------------------------------------------------------------------------
+# Engine-private series. Nothing here is shared: another engine that needs one
+# of these promotes it into `factors` rather than reaching across the boundary.
+# ---------------------------------------------------------------------------
+engines:
+  equity:
+    # The S&P500 price backbone — FinEquity's private input (FINDYN_V1_SPEC.md).
+    series:
+      # Daily incremental updates. Free tier is 25 requests/day — daily only, never backfill.
+      primary:
+        provider: alphavantage
+        symbol: SPY
+        frequency: daily
+        publication_lag_days: 0
+      # Bulk daily history for backfill (free, no key).
+      backfill:
+        provider: stooq
+        symbol: "^spx"
+        frequency: daily
+        publication_lag_days: 0
+      # Deep monthly history, 1871+.
+      deep_history:
+        provider: shiller
+        field: real_price
+        frequency: monthly
+        publication_lag_days: 30
+      fallback:
+        # Unofficial and unstable — isolated adapter, deletable without touching callers (§5.1).
+        provider: yahoo
+        symbol: "^GSPC"
+        frequency: daily
+        publication_lag_days: 0
 
 # Cached in KV with a short TTL for the dashboard's live tiles (§6).
 realtime_cache:

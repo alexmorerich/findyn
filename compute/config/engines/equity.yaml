@@ -1,0 +1,3 @@
+# FinEquity — the FINDYN_V1_SPEC.md model stack (Phase 3). Not built yet.
+# Its private price series live in series.yaml under engines.equity.series.
+enabled: false
