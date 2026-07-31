@@ -10,6 +10,7 @@
     "deploy:check": "wrangler deploy --dry-run --outdir=./.wrangler/dry-run",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "check:crons": "node scripts/check-crons.mjs",
+    "_types_note": "Run with .dev.vars moved aside. wrangler reads it and emits each secret as a typed binding, producing a file CI — which has no .dev.vars — regenerates differently and rejects as stale. src/types.ts declares the secrets, so they are not needed here.",
     "types": "wrangler types",
     "test": "vitest run",
     "test:watch": "vitest",
