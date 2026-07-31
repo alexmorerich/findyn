@@ -266,9 +266,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--from-file",
         help=(
-            "ingest a CSV already on disk instead of fetching (stooq only). "
-            "For history stooq's bot filter puts out of automated reach: download "
-            "https://stooq.com/q/d/l/?s=^spx&i=d in a browser and pass the file here."
+            "ingest a CSV already on disk instead of fetching (stooq only), for "
+            "history its bot filter puts out of automated reach. Needs an explicit "
+            "--series, since series.yaml points the equity backfill at Yahoo: "
+            "--provider stooq --series STOOQ:^SPX --from-file ~/Downloads/^spx_d.csv"
         ),
     )
     parser.add_argument("--cache-dir", default=".cache", help="on-disk response cache")

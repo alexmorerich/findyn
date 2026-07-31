@@ -265,6 +265,7 @@ def test_the_data_layer_populated_the_provider_registry():
         "bls",
         "bea",
         "engine_output",
+        "yahoo",
     }
 
 

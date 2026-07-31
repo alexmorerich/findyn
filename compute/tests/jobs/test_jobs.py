@@ -58,7 +58,18 @@ class TestBackfillFromFile:
     def test_a_good_file_is_ingested(self, tmp_path):
         path = tmp_path / "^spx_d.csv"
         path.write_text(self.CSV)
-        assert self._run(tmp_path, path) == 0
+        assert self._run(tmp_path, path, series=["STOOQ:^SPX"]) == 0
+
+    def test_naming_no_series_is_refused_now_that_none_is_configured(self, tmp_path):
+        """series.yaml points `backfill` at Yahoo, so stooq maps to no series.
+
+        The default then falls through to the adapter's whole catalogue, which
+        is seven symbols and cannot describe one file. Being refused is right;
+        picking the first would silently mislabel the data.
+        """
+        path = tmp_path / "^spx_d.csv"
+        path.write_text(self.CSV)
+        assert self._run(tmp_path, path) == 2
 
     def test_a_missing_file_is_refused_before_any_work(self, tmp_path):
         assert self._run(tmp_path, tmp_path / "absent.csv") == 2
