@@ -14,19 +14,30 @@ The labelling rule
    return and volatility **in the series' own units** — not the dimensionless
    model inputs. Those were built to be index-independent, which is precisely
    what makes them unable to answer "is this a bull market".
-2. Sort the five states by **return per unit of volatility**, descending, and
-   read the vocabulary onto them in order: ``bull_expansion``,
-   ``normal_expansion``, ``late_cycle``, ``bear``, ``crisis``.
+2. Sort the five states by **mean return**, descending, and read the vocabulary
+   onto them in order: ``bull_expansion``, ``normal_expansion``, ``late_cycle``,
+   ``bear``, ``crisis``. Ties break on lower volatility first, so the order is
+   total and a refit cannot swap two states that the data does not separate.
 
-One rule, no special cases. The obvious alternative — ``crisis`` is the
-highest-volatility state — was tried and is wrong, for a reason the data makes
-plain: on the 2016-2026 S&P window the most volatile stretch is the *COVID
-rebound*, and that rule labelled a state with a **+27.6%** mean return as a
-crisis. Volatility says how violent a period is, not which way it went, and the
-regime vocabulary is ordered by how risk-on a state is. Reward per unit of risk
-is the quantity that means that, and it also does the job raw mean return cannot:
-separating a late-cycle grind — still positive, but paying much less for its
-risk — from a genuine expansion.
+One rule, no special cases — and it is the third rule tried, because the two
+more sophisticated ones each fail on a real series:
+
+* **"crisis is the highest-volatility state"** labelled the *COVID rebound* a
+  crisis. On the 2016-2026 S&P window the most violent stretch is the recovery,
+  and that state's mean return is **+27.6%**. Volatility says how violent a
+  period was, not which way it went.
+* **"sort by return per unit of volatility"** survives that, and then fails on
+  the 1927+ S&P: it made a state returning −6.1% at **11.1%** volatility the
+  ``crisis`` — a slow drift — while a −12.7% state at 26.2% volatility was
+  labelled ``bear``. Dividing by a small denominator makes a mild decline look
+  catastrophic.
+
+Mean return is the crude rule and it is the one that works on all three series.
+The refinements were attempts to encode "risk-adjusted", and both ended up
+encoding an artefact of their own denominator. That volatility rises as the
+label worsens is left as a *consequence* to be checked — ``crisis`` does come
+out above the median volatility on every series tested — rather than as an input
+that can be gamed by a quiet state.
 
 Determinism is a requirement, not a nicety: the replay test recomputes fits, and
 an HMM that lands somewhere different each time would fail it for reasons that
@@ -258,9 +269,9 @@ def _state_stats(
 def reward_to_risk(mean_return: float, volatility: float) -> float:
     """Annualized return per unit of annualized volatility.
 
-    The single quantity the labelling rule sorts on. A degenerate state with no
-    dispersion sorts last rather than dividing by zero — it is not a regime and
-    should not be handed the most risk-on name in the vocabulary.
+    No longer the labelling key — see the module docstring for why it was
+    replaced — but kept because it is the natural way to *describe* a fitted
+    state and the backtest report quotes it.
     """
     return mean_return / volatility if volatility > 1e-12 else -np.inf
 
@@ -274,19 +285,15 @@ def label_states(
     every published regime *means* — and the one whose stability across refits
     §9 asks to be asserted.
 
-    Sorting is on ``(reward_to_risk, mean_return)`` so the order is total: two
-    states with identical ratios would otherwise be ordered by whichever the
-    optimizer numbered first, and a refit could swap them without anything
-    changing in the data.
+    Sorted on ``(mean_return, -volatility)`` so the order is total. Two states
+    with identical mean returns would otherwise be ordered by whichever the
+    optimizer happened to number first, and a refit could swap their labels
+    without a single number in the data having changed.
     """
     if len(raw_stats) != N_STATES:
         raise RegimeFitError(f"expected {N_STATES} states to label, got {len(raw_stats)}")
 
-    ordered = sorted(
-        raw_stats,
-        key=lambda s: (reward_to_risk(s[1], s[2]), s[1]),
-        reverse=True,
-    )
+    ordered = sorted(raw_stats, key=lambda s: (s[1], -s[2]), reverse=True)
     return {entry[0]: label for entry, label in zip(ordered, REGIMES, strict=True)}
 
 

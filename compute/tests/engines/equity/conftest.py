@@ -28,7 +28,7 @@ DEEP_HISTORY = "SHILLER:NOMINAL_PRICE"
 
 #: The snapshot's newest observation. Fixed rather than "today" so the suite does
 #: not change behaviour as the calendar moves.
-SNAPSHOT_AS_OF = date(2026, 7, 30)
+SNAPSHOT_AS_OF = date(2026, 7, 31)
 
 
 @pytest.fixture(scope="session")

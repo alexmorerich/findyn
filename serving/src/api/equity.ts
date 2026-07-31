@@ -1,5 +1,7 @@
 import type { Env } from '../types';
-import { FORCES } from '../domain';
+import { FORCES, REGIMES } from '../domain';
+import { MIN_THRESHOLD, decimate } from '../lib/decimate';
+import { MAX_HISTORY_ROWS } from './assets';
 
 /**
  * The v1 read surface (FINDYN_V1_SPEC.md §13): `/state` and `/forces`.
@@ -201,4 +203,140 @@ export async function getForces(
       model_version: r.model_version,
     }))
     .reverse();
+}
+
+
+// ---------------------------------------------------------------------------
+// §13 /regime — regime probability history
+// ---------------------------------------------------------------------------
+
+export interface RegimePoint {
+  as_of: string;
+  /** Regime name -> probability. The whole posterior, not the argmax. */
+  probabilities: Record<string, number>;
+  /** Highest-probability regime on this date, for a ribbon or a badge. */
+  regime: string;
+  confidence: number;
+}
+
+export interface RegimeHistory {
+  asset: string;
+  count: number;
+  available: number;
+  truncated: boolean;
+  decimated: { from: number; to: number; method: 'lttb' } | null;
+  regimes: readonly string[];
+  model_version: string | null;
+  points: RegimePoint[];
+}
+
+/**
+ * The posterior per date, pivoted into one row per date.
+ *
+ * Stored one row per (date, regime) because that is the shape §7 gives the
+ * table; served pivoted because a stacked-area chart wants a date's five
+ * probabilities together, and making the browser do the pivot over 25,000 rows
+ * is the work this endpoint exists to avoid.
+ *
+ * Decimation applies to *dates*, never to regimes: dropping a regime from a
+ * date would leave a posterior that does not sum to one.
+ */
+export async function getRegimeHistory(
+  env: Env,
+  asset: string,
+  opts: { from?: string; to?: string; points?: number } = {},
+): Promise<RegimeHistory> {
+  const newest = await env.DB.prepare(
+    `SELECT model_version FROM regime_state
+      WHERE asset = ?
+      ORDER BY date DESC, model_version DESC
+      LIMIT 1`,
+  )
+    .bind(asset)
+    .first<{ model_version: string }>();
+
+  if (!newest) {
+    return {
+      asset,
+      count: 0,
+      available: 0,
+      truncated: false,
+      decimated: null,
+      regimes: REGIMES,
+      model_version: null,
+      points: [],
+    };
+  }
+
+  // Pinned to one model version: a refit republishes the whole window under a
+  // new version, and mixing two of them would show a posterior stitched from
+  // two different models on one axis.
+  const conditions = ['asset = ?', 'model_version = ?'];
+  const bindings: (string | number)[] = [asset, newest.model_version];
+  if (opts.from) {
+    conditions.push('date >= ?');
+    bindings.push(opts.from);
+  }
+  if (opts.to) {
+    conditions.push('date <= ?');
+    bindings.push(opts.to);
+  }
+
+  const { results } = await env.DB.prepare(
+    `SELECT date, regime, probability FROM regime_state
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY date ASC
+      LIMIT ?`,
+  )
+    .bind(...bindings, MAX_HISTORY_ROWS)
+    .all<{ date: string; regime: string; probability: number }>();
+
+  const byDate = new Map<string, Record<string, number>>();
+  for (const row of results ?? []) {
+    const entry = byDate.get(row.date) ?? {};
+    entry[row.regime] = row.probability;
+    byDate.set(row.date, entry);
+  }
+
+  const dates = [...byDate.keys()].sort();
+  const all: RegimePoint[] = dates.map((date) => {
+    const probabilities = byDate.get(date)!;
+    let regime = '';
+    let confidence = -1;
+    for (const [name, value] of Object.entries(probabilities)) {
+      if (value > confidence) {
+        confidence = value;
+        regime = name;
+      }
+    }
+    return { as_of: date, probabilities, regime, confidence: Math.max(confidence, 0) };
+  });
+
+  const target = opts.points;
+  let points = all;
+  let decimated: RegimeHistory['decimated'] = null;
+  if (target && target >= MIN_THRESHOLD && all.length > target) {
+    // Decimated on the *severity* of the posterior, so the retained dates are
+    // the ones where the regime picture actually changed — a stacked area chart
+    // sampled on one arbitrary regime would keep the wrong turning points.
+    const severity = all.map((p, index) => ({
+      index,
+      x: Date.parse(`${p.as_of}T00:00:00Z`),
+      y: REGIMES.reduce((sum, name, rank) => sum + rank * (p.probabilities[name] ?? 0), 0),
+    }));
+    const kept = decimate(severity, target);
+    points = kept.map((s) => all[s.index]!);
+    decimated = { from: all.length, to: points.length, method: 'lttb' };
+  }
+
+  return {
+    asset,
+    count: points.length,
+    available: all.length,
+    truncated: (results ?? []).length >= MAX_HISTORY_ROWS,
+    decimated,
+    regimes: REGIMES,
+    model_version: newest.model_version,
+    points,
+  };
 }

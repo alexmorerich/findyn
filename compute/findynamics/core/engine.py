@@ -16,6 +16,7 @@ from findynamics.core.contracts.state import (
     AssetState,
     DerivedFeature,
     EngineOutput,
+    RegimeProbability,
     WorldState,
 )
 
@@ -47,6 +48,17 @@ class AssetEngine(ABC):
     #: configured in (``01-target-architecture.md`` §3 rule 5).
     experimental: ClassVar[bool] = False
 
+    #: When ``True``, the publishing methods reach back to the start of the data
+    #: rather than the nightly window.
+    #:
+    #: An instance flag rather than config, because it is a property of *this
+    #: run*: the nightly cron republishes a few years because all but the newest
+    #: rows are unchanged upserts, and a deliberate backfill republishes a
+    #: century once. One config number cannot mean both, and the failure mode of
+    #: trying — a cron quietly writing 200k rows a night — is expensive and
+    #: silent.
+    full_history: bool = False
+
     @abstractmethod
     def required_series(self) -> tuple[str, ...]:
         """Series ids this engine needs, resolved against series.yaml."""
@@ -75,5 +87,15 @@ class AssetEngine(ABC):
 
         Separate from :meth:`outputs` because these rows are versioned by model:
         see :class:`~findynamics.core.contracts.state.DerivedFeature`.
+        """
+        return ()
+
+    def regime_states(self, world: WorldState) -> tuple[RegimeProbability, ...]:
+        """Optional per-date regime posterior for the ``regime_state`` table.
+
+        The third of the three v1 output tables that became engine-private
+        (``01-target-architecture.md`` §6), and the third optional hook — one per
+        table, because each is keyed differently and none of the three can be
+        expressed as another without losing what its key protects.
         """
         return ()

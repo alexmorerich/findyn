@@ -123,6 +123,22 @@ export interface DerivedFeatureRow {
   model_version: string;
 }
 
+/**
+ * P3-B: one leg of a regime posterior on one date.
+ *
+ * A distribution, not a winning label. §12's output contract shows all five
+ * regimes, and the difference between a 0.95 bull call and a 0.35 one is most
+ * of what the state is saying — an argmax alone throws that away and cannot be
+ * reconstructed.
+ */
+export interface RegimeStateRow {
+  asset: string;
+  as_of: string;
+  regime: string;
+  probability: number;
+  model_version: string;
+}
+
 export interface WriteBackPayload {
   model_version?: string;
   generated_at?: string;
@@ -135,6 +151,7 @@ export interface WriteBackPayload {
   asset_state?: AssetStateRow[];
   engine_output?: EngineOutputRow[];
   derived_features?: DerivedFeatureRow[];
+  regime_state?: RegimeStateRow[];
 }
 
 export interface WriteBackResult {
@@ -147,6 +164,7 @@ export interface WriteBackResult {
   asset_state: number;
   engine_output: number;
   derived_features: number;
+  regime_state: number;
 }
 
 export class PayloadError extends Error {}
@@ -351,6 +369,18 @@ export function validatePayload(raw: unknown): WriteBackPayload {
     model_version: requireString(f?.model_version, `derived_features[${i}].model_version`),
   }));
 
+  const regimeState = (p.regime_state as RegimeStateRow[] | undefined)?.map((r, i) => ({
+    asset: requireMember(r?.asset, ASSETS, `regime_state[${i}].asset`),
+    as_of: requireDate(r?.as_of, `regime_state[${i}].as_of`),
+    // Regime vocabularies are engine-private (equity's five differ from the rate
+    // regimes), so the name is not checked against a shared list — only that it
+    // is present. The probability range is checked, because a posterior leg
+    // outside [0,1] is a bug wherever it came from.
+    regime: requireString(r?.regime, `regime_state[${i}].regime`),
+    probability: requireRange(r?.probability, 0, 1, `regime_state[${i}].probability`),
+    model_version: requireString(r?.model_version, `regime_state[${i}].model_version`),
+  }));
+
   return {
     model_version: modelVersion,
     generated_at: typeof p.generated_at === 'string' ? p.generated_at : new Date().toISOString(),
@@ -363,6 +393,7 @@ export function validatePayload(raw: unknown): WriteBackPayload {
     asset_state: assetState,
     engine_output: engineOutput,
     derived_features: derivedFeatures,
+    regime_state: regimeState,
   };
 }
 
@@ -455,6 +486,13 @@ export async function applyWriteBack(env: Env, payload: WriteBackPayload): Promi
        value = excluded.value, computed_at = excluded.computed_at`,
   );
 
+  const regimeStmt = db.prepare(
+    `INSERT INTO regime_state (asset, date, regime, probability, model_version)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(asset, date, regime, model_version) DO UPDATE SET
+       probability = excluded.probability`,
+  );
+
   const result: WriteBackResult = {
     metadata: 0,
     observations: 0,
@@ -465,6 +503,7 @@ export async function applyWriteBack(env: Env, payload: WriteBackPayload): Promi
     asset_state: 0,
     engine_output: 0,
     derived_features: 0,
+    regime_state: 0,
   };
 
   if (payload.metadata?.length) {
@@ -597,6 +636,15 @@ export async function applyWriteBack(env: Env, payload: WriteBackPayload): Promi
       db,
       payload.derived_features.map((f) =>
         featureStmt.bind(f.asset, f.as_of, f.feature, f.value, f.model_version, now),
+      ),
+    );
+  }
+
+  if (payload.regime_state?.length) {
+    result.regime_state = await runBatched(
+      db,
+      payload.regime_state.map((r) =>
+        regimeStmt.bind(r.asset, r.as_of, r.regime, r.probability, r.model_version),
       ),
     );
   }

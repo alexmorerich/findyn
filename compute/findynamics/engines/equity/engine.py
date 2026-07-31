@@ -1,18 +1,22 @@
 """FinEquity — the S&P500 dynamic state engine (FINDYN_V1_SPEC.md, Phase 3).
 
-Sub-milestone A: the causal feature path. Roles are resolved
-(:mod:`.prices`), the Kalman/FFD/kinematics pipeline runs over the publication
-series, and the result is published two ways — as ``derived_features`` (the model
-inputs, versioned by model) and as ``engine_output`` (the same information in
-chartable units).
+Two halves, and the seam between them is the point.
 
-``predict`` deliberately raises :class:`StateUnavailable` until sub-milestone B.
-An ``AssetState`` requires a ``regime``, and the only honest source of one is the
-fitted HMM. Publishing a placeholder regime would put a number on the dashboard
-that means nothing, and the moment it is on the dashboard someone reads it. So
-the engine says "no state yet" in the one way the job layer understands, keeps
-publishing the features it *can* stand behind, and ``/assets/equity/state``
-keeps answering 501 with its phase tag.
+**The feature path** (sub-milestone A) runs on the *publication* series and is
+published two ways: ``derived_features`` carries the model inputs in model units
+and is versioned by model, ``engine_output`` carries the same information in the
+units a chart wants.
+
+**The regime model** (sub-milestone B) is fitted on the *calibration* series and
+applied here. That transfer is the engine's central technical claim and it rests
+on the design matrix being dimensionless — :mod:`.regime.design` carries the
+argument, ``test_transfer.py`` the evidence, and every state carries the
+provenance in ``model_version``.
+
+``predict`` raises :class:`StateUnavailable` rather than fabricating a state
+when no fit is stored — a fresh deployment before its first refit. The features
+still publish, so ``/equity`` has data while ``/assets/equity/state`` correctly
+reports that no state exists.
 
 Layering: this engine reads the money engine's discount factors and risk-free
 benchmark as *data* through ``WorldState.series`` (sub-milestone C), never by
@@ -36,6 +40,8 @@ from findynamics.core.contracts.state import (
     AssetState,
     DerivedFeature,
     EngineOutput,
+    RegimeProbability,
+    Signal,
     WorldState,
 )
 from findynamics.core.engine import AssetEngine, StateUnavailable
@@ -44,6 +50,7 @@ from findynamics.engines.equity import prices as prices_mod
 from findynamics.engines.equity.domain import (
     CHART_METRICS,
     KINEMATIC_FEATURES,
+    REGIMES,
 )
 from findynamics.engines.equity.features.kinematics import JERK_LAMP_CODES, jerk_lamp
 from findynamics.engines.equity.features.pipeline import (
@@ -53,6 +60,14 @@ from findynamics.engines.equity.features.pipeline import (
     compute_features,
 )
 from findynamics.engines.equity.prices import PriceRoles, PriceSeries
+from findynamics.engines.equity.regime.calibrate import (
+    HORIZON_MONTHS,
+    TransitionModels,
+    build_training_frame,
+    fit_all_horizons,
+)
+from findynamics.engines.equity.regime.design import DesignError, RegimeDesign, build_design
+from findynamics.engines.equity.regime.hmm import HmmFit, RegimeModel, fit_hmm
 
 log = logging.getLogger("findynamics.engines.equity")
 
@@ -73,6 +88,66 @@ DAILY_ROLES: tuple[str, ...] = ("publication",)
 ALL_ROLES: tuple[str, ...] = ("publication", "calibration", "deep_history")
 
 
+def enforce_nesting(transitions: pd.DataFrame) -> pd.DataFrame:
+    """Make the horizons respect the fact that they are nested events.
+
+    "Enters bear or crisis within 3 months" implies "within 6 months" — the
+    3-month window is a subset of the 6-month one, so its probability cannot be
+    larger. Three classifiers fitted independently, each with its own isotonic
+    map, have no idea about that and routinely violate it: the first live state
+    produced 0.892 / 0.875 / 0.916 across 3m / 6m / 12m.
+
+    A reader cannot be expected to ignore that, and there is no interpretation
+    under which it is right. A running maximum in horizon order is the minimal
+    repair — it never lowers a longer horizon below a shorter one and leaves any
+    already-consistent triple untouched.
+
+    It is a repair, not a fix: the underlying miscalibration is still there and
+    is recorded in the open-issues note. What this prevents is publishing an
+    incoherent triple while that is outstanding.
+    """
+    if transitions.empty:
+        return transitions
+
+    ordered = sorted(
+        transitions.columns, key=lambda name: int(name.removeprefix("p_").removesuffix("m"))
+    )
+    return transitions[ordered].cummax(axis=1)
+
+
+@dataclass(frozen=True)
+class RegimeView:
+    """What the fitted regime model says about the publication path."""
+
+    model: RegimeModel
+    #: Filtered posteriors, one column per regime in vocabulary order.
+    posteriors: pd.DataFrame
+    #: Calibrated P(entering bear or crisis) per horizon, columns ``p_3m`` etc.
+    transitions: pd.DataFrame
+    #: SHAP contributions for the newest date, per horizon.
+    contributions: dict[int, pd.Series]
+    models: TransitionModels
+
+    @property
+    def latest(self) -> pd.Series:
+        return self.posteriors.iloc[-1]
+
+    @property
+    def regime(self) -> str:
+        return str(self.latest.idxmax())
+
+    @property
+    def confidence(self) -> float:
+        return float(self.latest.max())
+
+    @property
+    def entropy(self) -> float:
+        """Posterior entropy — the RII's uncertainty term (§3.2), published now
+        so sub-milestone C composes it rather than recomputing it."""
+        values = np.clip(self.latest.to_numpy(dtype=float), 1e-12, 1.0)
+        return float(-(values * np.log(values)).sum())
+
+
 @dataclass(frozen=True)
 class EquityAnalysis:
     """Everything one run derives from the information set, computed once."""
@@ -81,6 +156,8 @@ class EquityAnalysis:
     #: Engine role -> its feature path. Keys are a subset of :data:`ALL_ROLES`.
     features: dict[str, FeatureSet]
     model_version: str
+    #: ``None`` when no fitted regime model is in the artifact store yet.
+    regime: RegimeView | None = None
 
     @property
     def publication(self) -> FeatureSet:
@@ -130,8 +207,19 @@ class EquityEngine(AssetEngine):
 
     @property
     def history_days(self) -> int:
-        """How far back published histories reach. Bounds the write-back."""
-        return int(self._block("outputs").get("history_days", 1825))
+        """How far back published histories reach. Bounds the write-back.
+
+        Two windows, not one. The nightly run republishes ``history_days``
+        because everything older is an unchanged upsert; a backfill run sets
+        ``full_history`` and republishes ``backfill_history_days``, which reaches
+        1927. Charting the full record needs the second to have run once — and
+        needs the first to stay short, or the cron writes a century every night
+        to say nothing new.
+        """
+        block = self._block("outputs")
+        if self.full_history:
+            return int(block.get("backfill_history_days", 40000))
+        return int(block.get("history_days", 1825))
 
     def required_series(self) -> tuple[str, ...]:
         """Every configured equity price series.
@@ -211,7 +299,71 @@ class EquityEngine(AssetEngine):
             )
 
         return EquityAnalysis(
-            roles=resolved, features=features, model_version=self.model_version(resolved)
+            roles=resolved,
+            features=features,
+            model_version=self.model_version(resolved),
+            regime=(
+                self._regime_view(features["publication"]) if "publication" in features else None
+            ),
+        )
+
+    def _regime_view(self, features: FeatureSet) -> RegimeView | None:
+        """Apply the stored regime model to the publication path.
+
+        This is the inference half of "fit on calibration, infer on publication".
+        The parameters came from another series; the design matrix is
+        dimensionless so that is sound, and :mod:`.regime.design` carries the
+        argument and ``test_transfer.py`` the evidence.
+
+        Returns ``None`` — not an error — when no fit is stored. A daily run that
+        happens before the first refit should publish its features and decline
+        its state, exactly as sub-milestone A did.
+        """
+        document = self._artifacts.load(ARTIFACT_NAME)
+        stored = document.get("hmm")
+        if not isinstance(stored, dict):
+            return None
+
+        try:
+            model = RegimeModel(HmmFit.from_dict(stored))
+            design = self._design(features)
+            posteriors = model.posteriors(design)
+        except (KeyError, TypeError, ValueError, DesignError) as err:
+            log.warning("equity: stored regime model is unusable (%s); publishing no state", err)
+            return None
+
+        models = TransitionModels.from_dict(document.get("transitions"))
+        transitions = pd.DataFrame(index=posteriors.index)
+        contributions: dict[int, pd.Series] = {}
+
+        if models:
+            try:
+                inputs = build_training_frame(design, posteriors)
+                for months, transition_model in sorted(models.models.items()):
+                    transitions[f"p_{months}m"] = transition_model.predict(inputs)
+                    if not inputs.empty:
+                        contributions[months] = transition_model.contributions(inputs.tail(1)).iloc[
+                            0
+                        ]
+                transitions = enforce_nesting(transitions)
+            except (KeyError, ValueError) as err:
+                log.warning("equity: transition probabilities unavailable (%s)", err)
+
+        return RegimeView(
+            model=model,
+            posteriors=posteriors,
+            transitions=transitions,
+            contributions=contributions,
+            models=models,
+        )
+
+    def _design(self, features: FeatureSet) -> RegimeDesign:
+        block = self._block("regime")
+        return build_design(
+            features,
+            vol_months=float(block.get("vol_months", 1.0)),
+            vol_baseline_years=float(block.get("vol_baseline_years", 3.0)),
+            drawdown_years=float(block.get("drawdown_years", 1.0)),
         )
 
     def _stored_params(self) -> dict[str, FrozenFeatureParams]:
@@ -251,32 +403,211 @@ class EquityEngine(AssetEngine):
                 for feature_set in analysis.features.values()
             },
         }
+
+        calibration = analysis.features.get("calibration")
+        if calibration is not None:
+            hmm, transitions = self._fit_regime(analysis, calibration)
+            if hmm is not None:
+                document["hmm"] = hmm.as_dict()
+                document["transitions"] = transitions.as_dict()
+
         self._artifacts.save(ARTIFACT_NAME, document)
         log.info(
-            "equity.fit: froze parameters for %d series (%s) at %s",
+            "equity.fit: froze parameters for %d series (%s) at %s%s",
             len(analysis.features),
             ", ".join(sorted(document["series"])),
             world.as_of,
+            "" if "hmm" not in document else " + regime model",
         )
+
+    def _fit_regime(
+        self, analysis: EquityAnalysis, calibration: FeatureSet
+    ) -> tuple[HmmFit | None, TransitionModels]:
+        """Fit the HMM and the transition classifiers on the calibration series.
+
+        On ``calibration``, never on ``publication``: a five-state model fitted on
+        ten years containing one drawdown does not have a crisis state, and the
+        transition classifier would have a handful of positive episodes to learn
+        from. Which series supplied the parameters is recorded on the fit and
+        travels onto every state through ``model_version``.
+        """
+        block = self._block("regime")
+        try:
+            design = self._design(calibration)
+            hmm = fit_hmm(
+                design,
+                seed=int(block.get("seed", 20260731)),
+                prior_strength=float(block.get("transition_prior", 1000.0)),
+                is_proxy=analysis.roles.calibration_is_proxy,
+            )
+        except (ValueError, DesignError) as err:
+            log.warning("equity.fit: no regime model (%s)", err)
+            return None, TransitionModels()
+
+        model = RegimeModel(hmm)
+        posteriors = model.posteriors(design)
+        transitions = fit_all_horizons(
+            design,
+            posteriors,
+            model.states(design),
+            fitted_on=design.series.series_id,
+            is_proxy=analysis.roles.calibration_is_proxy,
+            horizons=tuple(int(h) for h in block.get("horizons", HORIZON_MONTHS)),
+        )
+        return hmm, transitions
 
     def predict(self, world: WorldState) -> AssetState:
-        """No state yet — the regime model is sub-milestone B.
+        """Today's regime state, from the model fitted on the calibration series.
 
-        Not a stub and not a failure. ``AssetState.regime`` has no defensible
-        value before the HMM exists, and the alternatives are both worse than
-        declining: a hard-coded regime is fiction, and a rule-based interim
-        regime is a second model nobody asked for that B would delete.
-
-        The feature path still publishes on every run — see :meth:`outputs` and
-        :meth:`derived_features` — so ``/equity`` has data while
-        ``/assets/equity/state`` correctly reports that no state exists.
+        Declines — rather than fabricating — when no fit is stored yet. That is
+        the state of a fresh deployment before its first refit, and a placeholder
+        regime on a dashboard is read as a market view.
         """
         analysis = self.analyze(world)
-        raise StateUnavailable(
-            f"equity: features are published ({len(analysis.publication.frame)} rows "
-            f"through {analysis.as_of}), but the regime model that an AssetState "
-            "needs lands in sub-milestone B; no state is published until then"
+        view = analysis.regime
+        if view is None:
+            raise StateUnavailable(
+                f"equity: features are published ({len(analysis.publication.frame)} rows "
+                f"through {analysis.as_of}), but no fitted regime model is stored; "
+                "run jobs.monthly_refit before the state can be published"
+            )
+
+        as_of = analysis.as_of or world.as_of
+        return AssetState(
+            asset=self.name,
+            as_of=as_of,
+            regime=view.regime,
+            expected_return=self._expected_return(view),
+            risk_score=self._risk_score(view),
+            confidence=round(view.confidence, 6),
+            signals=self._signals(analysis, view),
+            model_version=analysis.model_version,
+            components=self._components(analysis, view),
         )
+
+    def _expected_return(self, view: RegimeView) -> float:
+        """Posterior-weighted mean return of the fitted states, annualized.
+
+        **Not** the §10 forecast — that is a Monte Carlo distribution median and
+        arrives in sub-milestone C. This is the regime-conditional expectation the
+        fitted model already implies: each state's realized mean return, weighted
+        by today's posterior.
+
+        It inherits the calibration series' returns, so where that is a proxy this
+        number describes what the *proxy's* states earned. The caveat travels on
+        ``model_version`` and in the ``fitted_on_proxy`` component rather than
+        being buried here.
+        """
+        stats = {s.label: s.mean_return for s in view.model.fit.stats}
+        weighted = sum(
+            float(view.latest.get(label, 0.0)) * stats.get(label, 0.0) for label in REGIMES
+        )
+        return round(float(weighted), 8)
+
+    def _risk_score(self, view: RegimeView) -> float:
+        """0-100 regime severity — the RII's regime term, not the RII itself.
+
+        Posterior-weighted position on the risk-on ordering, scaled to the shared
+        axis: all weight on ``bull_expansion`` is 0, all weight on ``crisis`` is
+        100. Sub-milestone C replaces this with the full §3.2 composite, of which
+        this is one input; publishing the composite's name for one of its terms
+        would be worse than publishing the term and saying so.
+        """
+        severity = sum(
+            float(view.latest.get(label, 0.0)) * rank for rank, label in enumerate(REGIMES)
+        )
+        return round(min(max(100.0 * severity / (len(REGIMES) - 1), 0.0), 100.0), 4)
+
+    def _signals(self, analysis: EquityAnalysis, view: RegimeView) -> tuple[Signal, ...]:
+        """Calibrated transition probabilities plus the proxy caveat."""
+        signals: list[Signal] = []
+
+        for months in sorted(view.models.models):
+            column = f"p_{months}m"
+            if column not in view.transitions.columns:
+                continue
+            series = view.transitions[column].dropna()
+            if series.empty:
+                continue
+            probability = float(series.iloc[-1])
+            base = view.models.models[months].base_rate
+            signals.append(
+                Signal(
+                    name=f"p_transition_{months}m",
+                    value=round(probability, 6),
+                    # Against the base rate, not against 50%: a 30% chance of a
+                    # fresh deterioration inside three months is *reassuring* when
+                    # the unconditional rate is 26%, and alarming at 12 months
+                    # where it would be well under the 71% base.
+                    direction=(
+                        -1 if probability > base * 1.15 else (1 if probability < base * 0.85 else 0)
+                    ),
+                    note=(
+                        f"calibrated P(the regime enters bear or crisis within {months}m). "
+                        f"Read against the unconditional rate of {base:.0%} on "
+                        f"{view.model.fit.fitted_on}, not against 50%. An entry is a "
+                        "regime change, not necessarily a market collapse — the engine "
+                        "changes regime a few times a year."
+                    ),
+                )
+            )
+
+        signals.append(
+            Signal(
+                name="posterior_entropy",
+                value=round(view.entropy, 6),
+                # High entropy is the model saying it does not know, which §3.2
+                # treats as instability rather than as neutrality.
+                direction=-1 if view.entropy > 1.0 else 0,
+                note=(
+                    "entropy of the regime posterior; 0 is certainty, "
+                    f"{np.log(len(REGIMES)):.2f} is a uniform guess"
+                ),
+            )
+        )
+
+        if analysis.roles.calibration_is_proxy:
+            signals.append(
+                Signal(
+                    name="regime_model_is_proxy_fitted",
+                    value=1.0,
+                    direction=0,
+                    note=(
+                        f"every fitted parameter comes from {view.model.fit.fitted_on}, "
+                        "not the published index; daily S&P history before 2016 is "
+                        "not reachable (see docs/backtests/equity-p3b.md)"
+                    ),
+                )
+            )
+        return tuple(signals)
+
+    def _components(self, analysis: EquityAnalysis, view: RegimeView) -> dict[str, float]:
+        """The explanation trace: the posterior, the fit, and the top SHAP terms."""
+        components: dict[str, float] = {
+            f"posterior_{label}": round(float(view.latest.get(label, 0.0)), 6) for label in REGIMES
+        }
+        components["posterior_entropy"] = round(view.entropy, 6)
+        for months, transition_model in sorted(view.models.models.items()):
+            # The probability is meaningless without it: 0.89 against a 0.28 base
+            # is a warning, 0.89 against a 0.85 base is a shrug.
+            components[f"base_rate_{months}m"] = round(transition_model.base_rate, 6)
+        components["fitted_on_proxy"] = float(view.model.fit.fitted_on_proxy)
+        components["fit_observations"] = float(view.model.fit.observations)
+
+        stats = view.model.fit.stats_for(view.regime)
+        if stats is not None:
+            components["regime_mean_return"] = round(stats.mean_return, 6)
+            components["regime_volatility"] = round(stats.volatility, 6)
+            components["regime_persistence_obs"] = round(stats.persistence, 2)
+
+        for months, contributions in sorted(view.contributions.items()):
+            # §14.3: top contributions per prediction, by magnitude.
+            top = contributions.reindex(contributions.abs().sort_values(ascending=False).index)
+            for feature, value in top.head(4).items():
+                if math.isfinite(float(value)):
+                    components[f"shap_{months}m_{feature}"] = round(float(value), 6)
+
+        return components
 
     def outputs(self, world: WorldState) -> tuple[EngineOutput, ...]:
         """The publication feature path in chartable units.
@@ -321,7 +652,79 @@ class EquityEngine(AssetEngine):
             )
             for key, value in jerk.items()
         )
+        rows.extend(self._regime_outputs(analysis))
         return tuple(rows)
+
+    def _regime_outputs(self, analysis: EquityAnalysis) -> list[EngineOutput]:
+        """Regime severity and the transition probabilities, for the charts.
+
+        The posterior itself goes to ``regime_state`` (:meth:`regime_states`),
+        which is the table the spec gives it and the one ``/regime`` reads. What
+        is duplicated here is only the single-number summary a sparkline needs.
+        """
+        view = analysis.regime
+        if view is None:
+            return []
+
+        cutoff = self._cutoff(view.posteriors.index)
+        rows: list[EngineOutput] = []
+
+        severity = (
+            view.posteriors.loc[cutoff:]
+            .mul([rank for rank, _ in enumerate(REGIMES)], axis=1)
+            .sum(axis=1)
+        )
+        rows.extend(
+            EngineOutput(
+                asset=self.name,
+                metric="regime_severity",
+                as_of=key.date(),
+                value=round(float(value), 6),
+                meta={"regime": str(view.posteriors.loc[key].idxmax())},
+            )
+            for key, value in severity.items()
+            if math.isfinite(float(value))
+        )
+
+        for column in view.transitions.columns:
+            rows.extend(
+                self._output_rows(
+                    column.replace("p_", "p_transition_"),
+                    view.transitions[column].loc[cutoff:],
+                )
+            )
+        return rows
+
+    def regime_states(self, world: WorldState) -> tuple[RegimeProbability, ...]:
+        """The filtered posterior per date — §7's ``regime_state`` table.
+
+        The whole distribution, not the winning label: §12's contract shows all
+        five, and the difference between a 0.95 call and a 0.35 one is most of
+        what the state is saying.
+        """
+        try:
+            analysis = self.analyze(world)
+        except StateUnavailable as err:
+            log.warning("equity: no regime states — %s", err)
+            return ()
+
+        view = analysis.regime
+        if view is None:
+            return ()
+
+        window = view.posteriors.loc[self._cutoff(view.posteriors.index) :]
+        return tuple(
+            RegimeProbability(
+                asset=self.name,
+                as_of=key.date(),
+                regime=str(label),
+                probability=round(float(probability), 8),
+                model_version=analysis.model_version,
+            )
+            for key, row in window.iterrows()
+            for label, probability in row.items()
+            if math.isfinite(float(probability))
+        )
 
     def derived_features(self, world: WorldState) -> tuple[DerivedFeature, ...]:
         """The model inputs, in model units, versioned by ``model_version``.

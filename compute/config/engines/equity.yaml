@@ -52,7 +52,42 @@ features:
   # non-convergence is recorded as a diagnostic rather than treated as a failure.
   kalman_maxiter: 200
 
+# The regime model (§9 L2/L3). Fitted on the calibration series and applied to
+# the publication series — see findynamics/engines/equity/regime/design.py for
+# why that transfer is sound and tests/engines/equity/test_transfer.py for the
+# evidence.
+regime:
+  # Windows for the dimensionless design matrix, in the units named.
+  vol_months: 1.0
+  vol_baseline_years: 3.0
+  drawdown_years: 1.0
+
+  # Dirichlet pseudo-counts on the transition-matrix diagonal, quoted for a
+  # daily series and scaled to the actual frequency. Not a smoothing hack: it
+  # encodes "market regimes last months". Without it the fit produced a median
+  # regime duration of ONE DAY and 3,029 regime changes in 39 years, which is a
+  # volatility classifier wearing a regime model's vocabulary.
+  transition_prior: 1000.0
+
+  # Fixed so a refit on the same data lands in the same place; the replay test
+  # depends on it. Changing this is a model change, not a tuning knob.
+  seed: 20260731
+
+  # §9 L3 — horizons the transition probability is published for, in months.
+  horizons: [3, 6, 12]
+
 outputs:
-  # How far back the per-date histories are republished each run. Upserts are
-  # idempotent, so a longer window costs write time, never accuracy.
+  # TWO WINDOWS, AND THEY GOVERN DIFFERENT RUNS.
+  #
+  # history_days is the NIGHTLY window: how far back `jobs.daily` republishes
+  # its per-date series. Short on purpose — everything older is an unchanged
+  # upsert, so a long nightly window writes a century every night to add one
+  # row. Upserts are idempotent, so this costs write time, never accuracy.
   history_days: 1825
+  #
+  # backfill_history_days is the BACKFILL window, used only by
+  # `jobs.daily --full-history`. It reaches past 1927-12-30, the start of the
+  # daily S&P record, so one deliberate run puts the whole history in D1 and
+  # `/equity` can chart it. Running this nightly is the mistake the split
+  # exists to prevent.
+  backfill_history_days: 40000

@@ -41,17 +41,20 @@ def test_it_declares_every_configured_price_series(equity_engine):
 
 def test_the_model_version_names_the_calibration_series(equity_engine, equity_observations):
     analysis = equity_engine.analyze(world_from(equity_observations))
-    assert analysis.model_version == f"{MODEL_VERSION_BASE}+cal.fred_nasdaq100"
+    assert analysis.model_version == f"{MODEL_VERSION_BASE}+cal.yahoo_gspc"
 
 
 # --- predict: the deliberate refusal ---------------------------------------
 
 
-def test_predict_declines_rather_than_inventing_a_regime(equity_engine, equity_observations):
-    """An AssetState needs a regime and there is no honest source of one until
-    the HMM lands. Declining is the answer; a placeholder would be published to
-    a dashboard and read as a market view."""
-    with pytest.raises(StateUnavailable, match="sub-milestone B"):
+def test_predict_declines_before_the_first_refit(equity_engine, equity_observations):
+    """An AssetState needs a regime and the only honest source is the fitted HMM.
+
+    A fresh deployment has no stored fit, and a placeholder regime on a dashboard
+    is read as a market view. So the engine declines — and says which job would
+    fix it, because "no state" with no cause is an outage report, not an answer.
+    """
+    with pytest.raises(StateUnavailable, match="monthly_refit"):
         equity_engine.predict(world_from(equity_observations))
 
 
@@ -102,7 +105,7 @@ def test_every_feature_row_carries_its_own_model_version(equity_engine, equity_o
     """It is part of the table's key, so it cannot come off the run envelope."""
     rows = equity_engine.derived_features(world_from(equity_observations))
     versions = {row.model_version for row in rows}
-    assert versions == {f"{MODEL_VERSION_BASE}+cal.fred_nasdaq100"}
+    assert versions == {f"{MODEL_VERSION_BASE}+cal.yahoo_gspc"}
 
 
 def test_published_rows_are_finite_and_within_the_history_window(
@@ -148,7 +151,7 @@ def test_fit_freezes_parameters_for_every_resolved_role(
 
     assert set(document["series"]) == {
         "fred_sp500",
-        "fred_nasdaq100",
+        "yahoo_gspc",
         "shiller_nominal_price",
     }
     for body in document["series"].values():
@@ -170,8 +173,8 @@ def test_the_artifact_records_which_series_supplied_the_parameters(
 ):
     equity_engine.fit(world_from(equity_observations))
     roles = artifacts.load(ARTIFACT_NAME)["roles"]
-    assert roles["calibration"] == REGIME_PROXY
-    assert roles["calibration_is_proxy"] is True
+    assert roles["calibration"] == BACKFILL
+    assert roles["calibration_is_proxy"] is False
 
 
 def test_a_daily_run_reuses_frozen_parameters(equity_engine, equity_observations):

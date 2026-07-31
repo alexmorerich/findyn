@@ -27,6 +27,7 @@ from findynamics.core.contracts.state import (
     DerivedFeature,
     EngineOutput,
     FactorState,
+    RegimeProbability,
     WorldState,
 )
 from findynamics.core.engine import StateUnavailable
@@ -133,6 +134,17 @@ def engine_output_payload(output: EngineOutput) -> dict[str, Any]:
     }
 
 
+def regime_state_payload(row: RegimeProbability) -> dict[str, Any]:
+    """One ``regime_state`` row — the posterior, not just the winning label."""
+    return {
+        "asset": row.asset,
+        "as_of": row.as_of.isoformat(),
+        "regime": row.regime,
+        "probability": row.probability,
+        "model_version": row.model_version,
+    }
+
+
 def derived_feature_payload(feature: DerivedFeature) -> dict[str, Any]:
     """One ``derived_features`` row.
 
@@ -157,6 +169,7 @@ def run(
     cache_dir: Path | None = None,
     dry_run: bool = False,
     out: Path | None = None,
+    full_history: bool = False,
 ) -> int:
     config = load_series_config(config_path)
     world, engines = build_world(as_of, config, cache_dir=cache_dir)
@@ -165,9 +178,17 @@ def run(
         log.error("no engines are enabled; nothing to compute")
         return 2
 
+    # Engine-agnostic: the job says "this is a backfill run" and each engine
+    # decides what that means for its own windows.
+    if full_history:
+        log.info("full-history run: engines will republish from the start of their data")
+        for engine in engines:
+            engine.full_history = True
+
     states: list[dict[str, Any]] = []
     outputs: list[dict[str, Any]] = []
     features: list[dict[str, Any]] = []
+    regimes: list[dict[str, Any]] = []
     failed: list[str] = []
     silent: list[str] = []
 
@@ -191,6 +212,7 @@ def run(
         try:
             rows = engine.outputs(world)
             feature_rows = engine.derived_features(world)
+            regime_rows = engine.regime_states(world)
         except Exception as err:
             failed.append(engine.name)
             log.exception("engine %s failed publishing its outputs: %s", engine.name, err)
@@ -200,8 +222,9 @@ def run(
             states.append(asset_state_payload(state))
         outputs.extend(engine_output_payload(row) for row in rows)
         features.extend(derived_feature_payload(row) for row in feature_rows)
+        regimes.extend(regime_state_payload(row) for row in regime_rows)
         log.info(
-            "%s: %s (+%d output rows, +%d features)",
+            "%s: %s (+%d output rows, +%d features, +%d regime rows)",
             engine.name,
             (
                 "no state"
@@ -211,6 +234,7 @@ def run(
             ),
             len(rows),
             len(feature_rows),
+            len(regime_rows),
         )
 
     if not states and not outputs and not features:
@@ -233,6 +257,7 @@ def run(
         "asset_state": states,
         "engine_output": outputs,
         "derived_features": features,
+        "regime_state": regimes,
     }
 
     if out is not None:
@@ -246,15 +271,17 @@ def run(
     # and chunk_on yields such a payload through untouched — so no row is sent
     # twice and no chunk exceeds the batch size on either array.
     chunks = [
-        inner
+        innermost
         for outer in chunk_on(payload, "engine_output", ENGINE_OUTPUT_BATCH_SIZE)
         for inner in chunk_on(outer, "derived_features", ENGINE_OUTPUT_BATCH_SIZE)
+        for innermost in chunk_on(inner, "regime_state", ENGINE_OUTPUT_BATCH_SIZE)
     ]
     if len(chunks) > 1:
         log.info(
-            "splitting %d output + %d feature rows across %d requests",
+            "splitting %d output + %d feature + %d regime rows across %d requests",
             len(outputs),
             len(features),
+            len(regimes),
             len(chunks),
         )
     for chunk in chunks:
@@ -272,6 +299,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--cache-dir", type=Path, help="HTTP response cache directory")
     parser.add_argument("--out", type=Path, help="also write the payload to this file")
+    parser.add_argument(
+        "--full-history",
+        action="store_true",
+        help=(
+            "Republish every engine's per-date series from the start of its data. "
+            "For a deliberate backfill — the nightly cron must not use this, or it "
+            "writes the whole record every night to add one row."
+        ),
+    )
     args = parser.parse_args(argv)
     configure_logging(args.verbose)
 
@@ -281,6 +317,7 @@ def main(argv: list[str] | None = None) -> int:
         cache_dir=args.cache_dir,
         dry_run=args.dry_run,
         out=args.out,
+        full_history=args.full_history,
     )
 
 

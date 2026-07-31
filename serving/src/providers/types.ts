@@ -8,7 +8,7 @@
  * adapter lands, not before.
  */
 
-export type ProviderId = 'fred' | 'shiller' | 'bls' | 'bea' | 'stooq';
+export type ProviderId = 'fred' | 'shiller' | 'bls' | 'bea' | 'stooq' | 'yahoo';
 
 /** One macro observation, carrying its point-in-time release date (§14.1). */
 export interface MacroObservation {

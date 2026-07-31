@@ -40,7 +40,7 @@ def test_equity_price_covers_every_horizon_p3_needs():
     price = load_series_config().engine_series("equity")
     assert price["primary"].provider == "fred"
     assert price["regime_proxy"].id == "FRED:NASDAQ100"
-    assert price["backfill"].provider == "stooq"
+    assert price["backfill"].provider == "yahoo"
 
 
 def test_deep_history_reaches_1871():
@@ -55,7 +55,7 @@ def test_equity_series_ids_are_provider_native():
     adapter accepted — valid at load, dead at fetch."""
     price = load_series_config().engine_series("equity")
     assert price["primary"].id == "FRED:SP500"
-    assert price["backfill"].id == "STOOQ:^SPX"
+    assert price["backfill"].id == "YAHOO:^GSPC"
     assert price["deep_history"].id == "SHILLER:NOMINAL_PRICE"
 
 

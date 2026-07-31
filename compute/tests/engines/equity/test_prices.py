@@ -153,25 +153,37 @@ def test_precedence_order_is_the_documented_one():
 
 
 def test_the_shipped_snapshot_resolves_to_the_documented_split(equity_observations, config):
-    """Stooq is bot-filtered from most egresses, so the proxy carries the fit."""
+    """The backfill role is filled, so calibration is the S&P itself.
+
+    This is the configuration the precedence was written for and it arrived
+    without a code change: a daily S&P source appeared, and because `backfill`
+    outranks `regime_proxy` it took the calibration role and dropped the proxy
+    caveat with it. The NASDAQ path is still exercised — see
+    ``test_the_proxy_carries_calibration_when_the_backfill_is_absent`` — because
+    it is what the engine falls back to.
+    """
     world = world_from(equity_observations)
     roles = resolve_from(world.series, config)
 
     assert roles.publication.series_id == PRIMARY
-    assert roles.calibration.series_id == REGIME_PROXY
-    assert roles.calibration_is_proxy
+    assert roles.calibration.series_id == BACKFILL
+    assert roles.calibration.source_role == "backfill"
+    assert not roles.calibration_is_proxy, (
+        "YAHOO:^GSPC and FRED:SP500 are two vendors' copies of one index; "
+        "calling that a proxy would attach a caveat the data does not warrant"
+    )
     assert roles.deep_history is not None
     assert roles.deep_history.series_id == DEEP_HISTORY
 
 
 def test_counts_come_from_the_information_set_not_from_config(equity_observations, config):
-    """A series declared in yaml but never ingested counts as zero."""
+    """Every configured role is counted from what D1 actually holds."""
     world = world_from(equity_observations)
     tallied = prices_mod.observation_counts(
         world.series, [PRIMARY, REGIME_PROXY, BACKFILL, DEEP_HISTORY]
     )
-    assert tallied[BACKFILL] == 0, "Stooq is not in the snapshot"
     assert tallied[PRIMARY] == 2512
+    assert tallied[BACKFILL] > 24000, "the S&P backfill reaches back to 1927"
     assert tallied[DEEP_HISTORY] > 1800
 
 

@@ -203,7 +203,35 @@ export interface AssetHistory {
   asset: string;
   metric: string;
   count: number;
+  /** Rows the requested window holds, before any server-side decimation. */
+  available: number;
+  /**
+   * True when the window exceeded the API's row ceiling and the response is a
+   * prefix rather than the answer. Rendered explicitly: a clipped series and a
+   * genuinely short one look identical on a chart.
+   */
+  truncated: boolean;
+  /** Present when the server downsampled for rendering (LTTB). */
+  decimated: { from: number; to: number; method: string } | null;
   points: HistoryPoint[];
+}
+
+export interface RegimePoint {
+  as_of: string;
+  probabilities: Record<string, number>;
+  regime: string;
+  confidence: number;
+}
+
+export interface RegimeHistory {
+  asset: string;
+  count: number;
+  available: number;
+  truncated: boolean;
+  decimated: { from: number; to: number; method: string } | null;
+  regimes: string[];
+  model_version: string | null;
+  points: RegimePoint[];
 }
 
 /**
@@ -371,13 +399,30 @@ export const getAssetState = (asset: string) =>
 export function getAssetHistory(
   asset: string,
   metric: string,
-  opts: { from?: string; to?: string; limit?: number } = {},
+  opts: { from?: string; to?: string; limit?: number; points?: number } = {},
 ): Promise<ApiResult<AssetHistory>> {
   const query = new URLSearchParams({ metric });
   if (opts.from) query.set('from', opts.from);
   if (opts.to) query.set('to', opts.to);
   if (opts.limit !== undefined) query.set('limit', String(opts.limit));
+  // Ask the server to downsample. A century of daily closes is ~25k points and
+  // thirteen points per pixel — decimating here rather than in the browser is
+  // the difference between a chart and a frozen main thread.
+  if (opts.points !== undefined) query.set('points', String(opts.points));
   return apiGet<AssetHistory>(`/assets/${encodeURIComponent(asset)}/history?${query}`);
+}
+
+/** Regime posterior history — one row per date, all five probabilities. */
+export function getRegimeHistory(
+  opts: { asset?: string; from?: string; to?: string; points?: number } = {},
+): Promise<ApiResult<RegimeHistory>> {
+  const query = new URLSearchParams();
+  if (opts.asset) query.set('asset', opts.asset);
+  if (opts.from) query.set('from', opts.from);
+  if (opts.to) query.set('to', opts.to);
+  if (opts.points !== undefined) query.set('points', String(opts.points));
+  const qs = query.toString();
+  return apiGet<RegimeHistory>(`/regime${qs === '' ? '' : `?${qs}`}`);
 }
 
 // ---------------------------------------------------------------------------

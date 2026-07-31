@@ -17,7 +17,7 @@ import {
   listAssets,
   listMetrics,
 } from './assets';
-import { UnknownForceError, getForces, getTwoLayerState } from './equity';
+import { UnknownForceError, getForces, getRegimeHistory, getTwoLayerState } from './equity';
 import {
   ASSETS,
   DISCOUNT_HORIZONS,
@@ -204,16 +204,30 @@ api.get('/assets/:asset/history', async (c) => {
     );
   }
 
-  const points = await getHistory(c.env, asset, metric, {
+  const history = await getHistory(c.env, asset, metric, {
     from: c.req.query('from'),
     to: c.req.query('to'),
     limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined,
+    // `points` asks the server to downsample for rendering. Opt-in, because a
+    // consumer reading these series back as model input (P2's curve read-back)
+    // wants every row and would be quietly given a sketch otherwise.
+    points: c.req.query('points') ? Number(c.req.query('points')) : undefined,
   });
-  const newest = points.at(-1)?.as_of ?? null;
+  const newest = history.points.at(-1)?.as_of ?? null;
 
   return c.json(
     envelope(
-      { asset, metric, count: points.length, points },
+      {
+        asset,
+        metric,
+        count: history.points.length,
+        // Reported even when nothing was dropped: a client that has to infer
+        // whether it received the whole window will eventually infer wrong.
+        available: history.available,
+        truncated: history.truncated,
+        decimated: history.decimated,
+        points: history.points,
+      },
       { as_of: newest, stale: isAssetStale(newest) },
     ),
   );
@@ -236,8 +250,22 @@ api.get('/state', async (c) => {
   );
 });
 
-// M3 — regime probability history
-api.get('/regime', (c) => notImplemented(c, 'M3', '§13 /regime'));
+// M3 — regime probability history. Live from P3-B.
+api.get('/regime', async (c) => {
+  const history = await getRegimeHistory(c.env, c.req.query('asset') ?? 'equity', {
+    from: c.req.query('from'),
+    to: c.req.query('to'),
+    points: c.req.query('points') ? Number(c.req.query('points')) : undefined,
+  });
+  const newest = history.points.at(-1)?.as_of ?? null;
+  return c.json(
+    envelope(history, {
+      as_of: newest,
+      model_version: history.model_version,
+      stale: isAssetStale(newest),
+    }),
+  );
+});
 
 // M2 — force score history with component breakdowns. Live from P3-A; the
 // scores themselves have been published since P1, when Layer 0 shipped.

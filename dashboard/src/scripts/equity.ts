@@ -1,29 +1,41 @@
 /**
- * FinEquity page, sub-milestone A (04-ui-plan.md §P3).
+ * FinEquity page (04-ui-plan.md §P3, sub-milestones A and B).
  *
- * Six views over the causal feature path: the K(t) tiles, an explicit
- * placeholder where the regime will land, the filtered level against the close,
- * velocity and acceleration, the jerk lamp, and F(t) with its breakdowns.
+ * Kinematics, regime posterior, calibrated transition probabilities, and the
+ * force layer — over a range the reader chooses, from one year to the whole
+ * daily record back to 1927.
  *
- * Two API surfaces, deliberately. `/state` carries the *snapshot* of both
- * layers, which is one request instead of eleven; `/assets/equity/history`
- * carries the series the charts draw. The snapshot is in model units — logs,
- * annualized rates, z-scores — and the histories are in the units a reader
- * expects, which is why the price chart never has to exponentiate anything.
+ * Three things here are load-bearing beyond "draw the data":
  *
- * The regime panel says "not computed yet" rather than being omitted. The engine
- * is live and publishing features while deliberately declining to publish an
- * AssetState, and a page that quietly showed only kinematics would leave a
- * reader to conclude the market has no regime.
+ * **Ranges are server-side windows.** Every range refetches with its own
+ * `from`/`points`. Fetching the century once and slicing in the browser would
+ * ship 25,000 points per series to draw a few hundred, and is explicitly not
+ * what `from`/`to` are for.
+ *
+ * **Truncation is never silent.** The API reports `available`, `truncated` and
+ * `decimated`; all three are surfaced. A clipped series and a genuinely short
+ * one look identical on a chart, and the reader would conclude the market began
+ * in 2021.
+ *
+ * **The regime panel says what it is not.** Transition probabilities are shown
+ * against their base rate rather than against 50%, because an 89% chance of a
+ * regime change beside a 97% bull call reads as a contradiction until you know
+ * the unconditional rate is 28%.
  */
 import {
   getAssetHistory,
+  getAssetState,
   getForces,
+  getRegimeHistory,
+  getSeries,
   getTwoLayerState,
   type ApiResult,
   type AssetHistory,
+  type AssetState,
   type ForceHistory,
   type HistoryPoint,
+  type RegimeHistory,
+  type SeriesDetail,
   type TwoLayerState,
 } from '../lib/api';
 import {
@@ -37,24 +49,40 @@ import {
   svgEl,
   table,
 } from '../lib/dom';
-import { formatDate, formatValue, type Tone } from '../lib/format';
+import { formatCount, formatDate, formatValue, type Tone } from '../lib/format';
+import { DEFAULT_RANGE, RANGES, fromDate, rangeFromUrl, writeRangeToUrl, type RangeSpec } from './ranges';
 
 const ASSET = 'equity';
-
-/** Five years of daily observations, matching the engine's publish window. */
-const HISTORY_LIMIT = 1400;
-
-const stateHost = document.querySelector('#equity-state');
-const regimeHost = document.querySelector('#equity-regime');
-const priceHost = document.querySelector('#equity-price');
-const kinematicsHost = document.querySelector('#equity-kinematics');
-const jerkHost = document.querySelector('#equity-jerk');
-const forcesHost = document.querySelector('#equity-forces');
-const provenanceHost = document.querySelector('#equity-provenance');
+const DEEP_SERIES = 'SHILLER:NOMINAL_PRICE';
 
 /** §3.1 thresholds, mirroring features/kinematics.py. */
 const JERK_ELEVATED = 2.0;
 const JERK_EXTREME = 3.0;
+
+/** §9 L2 vocabulary, most to least risk-on — the stacking order. */
+const REGIMES = ['bull_expansion', 'normal_expansion', 'late_cycle', 'bear', 'crisis'] as const;
+
+const REGIME_TONE: Record<string, Tone> = {
+  bull_expansion: 'ok',
+  normal_expansion: 'ok',
+  late_cycle: 'warn',
+  bear: 'bad',
+  crisis: 'bad',
+};
+
+const host = (id: string) => document.querySelector(`#equity-${id}`);
+
+const hosts = {
+  range: host('range'),
+  state: host('state'),
+  regime: host('regime'),
+  transitions: host('transitions'),
+  price: host('price'),
+  kinematics: host('kinematics'),
+  jerk: host('jerk'),
+  forces: host('forces'),
+  provenance: host('provenance'),
+};
 
 // ------------------------------------------------------------------ charts
 
@@ -65,27 +93,30 @@ const PAD = { top: 18, right: 18, bottom: 34, left: 66 };
 interface Line {
   points: HistoryPoint[];
   className: string;
-  label: string;
 }
 
 function finite(points: HistoryPoint[]): HistoryPoint[] {
   return points.filter((p) => Number.isFinite(p.value));
 }
 
+interface ChartOptions {
+  label: string;
+  caption: string;
+  zeroLine?: boolean;
+  bands?: number[];
+  /** Log price axis — required once a range spans decades. */
+  log?: boolean;
+}
+
 /**
- * Several series against a shared date axis and a shared y scale.
+ * Several series against a shared date axis.
  *
- * x is positional over the union of dates rather than proportional to calendar
- * time, because trading days are not evenly spaced and a time-proportional axis
- * puts visible gaps at every weekend on a five-year daily chart.
+ * x is proportional to *calendar time*, not to position in the array. With
+ * server-side decimation the points are no longer evenly spaced — LTTB keeps
+ * more of them around a crash — so a positional axis would stretch the busy
+ * stretches and compress the quiet ones.
  */
-function lineChart(
-  lines: Line[],
-  opts: { label: string; caption: string; zeroLine?: boolean; bands?: number[] } = {
-    label: '',
-    caption: '',
-  },
-): SVGSVGElement {
+function lineChart(lines: Line[], opts: ChartOptions): SVGSVGElement {
   const svg = svgEl('svg', {
     class: 'chart',
     viewBox: `0 0 ${W} ${H}`,
@@ -94,7 +125,9 @@ function lineChart(
     'aria-label': opts.label,
   });
 
-  const drawn = lines.map((l) => ({ ...l, points: finite(l.points) })).filter((l) => l.points.length > 1);
+  const drawn = lines
+    .map((l) => ({ ...l, points: finite(l.points) }))
+    .filter((l) => l.points.length > 1);
   if (drawn.length === 0) {
     svg.appendChild(
       svgEl('text', { x: W / 2, y: H / 2, 'text-anchor': 'middle' }, 'not enough history to plot'),
@@ -102,17 +135,23 @@ function lineChart(
     return svg;
   }
 
-  // One index per date, shared across series so they line up even where one
-  // starts later than another — jerk_z waits for its z-score baseline.
-  const dates = [...new Set(drawn.flatMap((l) => l.points.map((p) => p.as_of)))].sort();
-  const index = new Map(dates.map((d, i) => [d, i]));
+  const time = (iso: string) => Date.parse(`${iso}T00:00:00Z`);
+  const times = drawn.flatMap((l) => l.points.map((p) => time(p.as_of)));
+  const tMin = Math.min(...times);
+  const tMax = Math.max(...times);
 
-  const values = drawn.flatMap((l) => l.points.map((p) => p.value));
-  let lo = Math.min(...values, ...(opts.zeroLine ? [0] : []));
-  let hi = Math.max(...values, ...(opts.zeroLine ? [0] : []));
+  // A log axis cannot show a non-positive value; those only occur on the signed
+  // panels, which never ask for one.
+  const useLog = Boolean(opts.log) && drawn.every((l) => l.points.every((p) => p.value > 0));
+  const project = (v: number) => (useLog ? Math.log(v) : v);
+
+  const values = drawn.flatMap((l) => l.points.map((p) => project(p.value)));
+  let lo = Math.min(...values, ...(opts.zeroLine && !useLog ? [0] : []));
+  let hi = Math.max(...values, ...(opts.zeroLine && !useLog ? [0] : []));
   if (opts.bands) {
-    lo = Math.min(lo, -Math.max(...opts.bands));
-    hi = Math.max(hi, Math.max(...opts.bands));
+    const widest = Math.max(...opts.bands);
+    lo = Math.min(lo, -widest);
+    hi = Math.max(hi, widest);
   }
   const pad = hi - lo < 1e-9 ? Math.max(Math.abs(hi) * 0.02, 0.01) : (hi - lo) * 0.08;
   const yMin = lo - pad;
@@ -120,13 +159,15 @@ function lineChart(
 
   const plotW = W - PAD.left - PAD.right;
   const plotH = H - PAD.top - PAD.bottom;
-  const x = (date: string) => PAD.left + ((index.get(date) ?? 0) / Math.max(dates.length - 1, 1)) * plotW;
-  const y = (v: number) => PAD.top + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
+  const x = (iso: string) =>
+    PAD.left + (tMax === tMin ? 0.5 : (time(iso) - tMin) / (tMax - tMin)) * plotW;
+  const y = (v: number) => PAD.top + plotH - ((project(v) - yMin) / (yMax - yMin)) * plotH;
 
   const TICKS = 4;
   for (let t = 0; t <= TICKS; t++) {
-    const value = yMin + ((yMax - yMin) * t) / TICKS;
-    const gy = y(value);
+    const projected = yMin + ((yMax - yMin) * t) / TICKS;
+    const value = useLog ? Math.exp(projected) : projected;
+    const gy = PAD.top + plotH - ((projected - yMin) / (yMax - yMin)) * plotH;
     svg.appendChild(
       svgEl('line', { class: 'grid', x1: PAD.left, x2: W - PAD.right, y1: gy, y2: gy }),
     );
@@ -138,7 +179,7 @@ function lineChart(
     svgEl('line', { class: 'axis', x1: PAD.left, x2: PAD.left, y1: PAD.top, y2: H - PAD.bottom }),
   );
 
-  if (opts.zeroLine && yMin < 0 && yMax > 0) {
+  if (opts.zeroLine && !useLog && yMin < 0 && yMax > 0) {
     svg.appendChild(
       svgEl('line', { class: 'axis', x1: PAD.left, x2: W - PAD.right, y1: y(0), y2: y(0) }),
     );
@@ -170,27 +211,131 @@ function lineChart(
     );
   }
 
-  const first = dates[0];
-  const last = dates[dates.length - 1];
-  if (first) svg.appendChild(svgEl('text', { x: PAD.left, y: H - 12 }, first));
-  if (last) {
-    svg.appendChild(svgEl('text', { x: W - PAD.right, y: H - 12, 'text-anchor': 'end' }, last));
-  }
-  if (opts.caption) svg.appendChild(svgEl('text', { x: PAD.left, y: 12 }, opts.caption));
+  const first = drawn[0]!.points[0]!.as_of;
+  const last = drawn[0]!.points.at(-1)!.as_of;
+  svg.appendChild(svgEl('text', { x: PAD.left, y: H - 12 }, first));
+  svg.appendChild(svgEl('text', { x: W - PAD.right, y: H - 12, 'text-anchor': 'end' }, last));
+  svg.appendChild(
+    svgEl('text', { x: PAD.left, y: 12 }, opts.caption + (useLog ? ' · log scale' : '')),
+  );
   return svg;
 }
 
-function legend(items: { label: string; swatch: string }[]): HTMLElement {
+/**
+ * The regime posterior as a stacked area, ordered most to least risk-on.
+ *
+ * Stacked because the five probabilities sum to one: the reader should see a
+ * full band whose *composition* shifts, not five lines that happen to move
+ * together. Ordering matters — crisis on top means the risk-off share grows
+ * downward from the roof and is legible at a glance.
+ */
+function regimeChart(points: RegimeHistory['points']): SVGSVGElement {
+  const svg = svgEl('svg', {
+    class: 'chart',
+    viewBox: `0 0 ${W} ${H}`,
+    role: 'img',
+    preserveAspectRatio: 'xMidYMid meet',
+    'aria-label': `Regime posterior over ${points.length} dates`,
+  });
+
+  if (points.length < 2) {
+    svg.appendChild(
+      svgEl('text', { x: W / 2, y: H / 2, 'text-anchor': 'middle' }, 'no regime history yet'),
+    );
+    return svg;
+  }
+
+  const time = (iso: string) => Date.parse(`${iso}T00:00:00Z`);
+  const tMin = time(points[0]!.as_of);
+  const tMax = time(points.at(-1)!.as_of);
+  const plotW = W - PAD.left - PAD.right;
+  const plotH = H - PAD.top - PAD.bottom;
+  const x = (iso: string) =>
+    PAD.left + (tMax === tMin ? 0.5 : (time(iso) - tMin) / (tMax - tMin)) * plotW;
+  const y = (v: number) => PAD.top + plotH - v * plotH;
+
+  // Cumulative bands: each regime's ribbon sits on the sum of the ones above it.
+  let below = points.map(() => 0);
+  for (const regime of REGIMES) {
+    const top = points.map((p, i) => below[i]! + (p.probabilities[regime] ?? 0));
+    const forward = points.map((p, i) => `${x(p.as_of).toFixed(2)},${y(top[i]!).toFixed(2)}`);
+    const back = points
+      .map((p, i) => `${x(p.as_of).toFixed(2)},${y(below[i]!).toFixed(2)}`)
+      .reverse();
+    svg.appendChild(
+      svgEl('path', {
+        class: `regimeband regimeband--${regime}`,
+        d: `M${forward.join(' L')} L${back.join(' L')} Z`,
+      }),
+    );
+    below = top;
+  }
+
+  svg.appendChild(svgEl('text', { x: PAD.left, y: H - 12 }, points[0]!.as_of));
+  svg.appendChild(
+    svgEl('text', { x: W - PAD.right, y: H - 12, 'text-anchor': 'end' }, points.at(-1)!.as_of),
+  );
+  svg.appendChild(svgEl('text', { x: PAD.left, y: 12 }, 'P(regime) — stacked, sums to 1'));
+  return svg;
+}
+
+/** A transition probability as a dial, read against its base rate. */
+function dial(months: number, probability: number, base: number | undefined): HTMLElement {
+  const pct = Math.round(probability * 100);
+  const elevated = base !== undefined && probability > base * 1.15;
+  const size = 120;
+  const radius = 46;
+  const circumference = 2 * Math.PI * radius;
+
+  const svg = svgEl('svg', {
+    class: 'dial',
+    viewBox: `0 0 ${size} ${size}`,
+    role: 'img',
+    'aria-label': `${pct} percent probability of entering bear or crisis within ${months} months`,
+  });
+  svg.appendChild(
+    svgEl('circle', { class: 'dial__track', cx: size / 2, cy: size / 2, r: radius }),
+  );
+  svg.appendChild(
+    svgEl('circle', {
+      class: `dial__value dial__value--${elevated ? 'warn' : 'ok'}`,
+      cx: size / 2,
+      cy: size / 2,
+      r: radius,
+      'stroke-dasharray': `${(circumference * probability).toFixed(2)} ${circumference.toFixed(2)}`,
+      transform: `rotate(-90 ${size / 2} ${size / 2})`,
+    }),
+  );
+  if (base !== undefined) {
+    // The base rate as a tick: without it the number has no scale, and 89%
+    // against a 28% base reads the same as 89% against an 85% one.
+    const angle = -90 + 360 * base;
+    svg.appendChild(
+      svgEl('line', {
+        class: 'dial__base',
+        x1: size / 2,
+        y1: size / 2 - radius + 6,
+        x2: size / 2,
+        y2: size / 2 - radius - 6,
+        transform: `rotate(${angle} ${size / 2} ${size / 2})`,
+      }),
+    );
+  }
+  svg.appendChild(
+    svgEl('text', { class: 'dial__label', x: size / 2, y: size / 2 + 6, 'text-anchor': 'middle' }, `${pct}%`),
+  );
+
   return el(
     'div',
-    { class: 'legend' },
-    ...items.map((item) =>
-      el(
-        'span',
-        { class: 'legend__item' },
-        el('span', { class: `legend__swatch ${item.swatch}` }),
-        item.label,
-      ),
+    { class: 'dialcard' },
+    svg,
+    el('div', { class: 'dialcard__title' }, `${months} months`),
+    el(
+      'div',
+      { class: 'dialcard__detail' },
+      base === undefined
+        ? 'P(enters bear or crisis)'
+        : `vs ${Math.round(base * 100)}% unconditional`,
     ),
   );
 }
@@ -209,11 +354,7 @@ function tile(label: string, value: string, tone: Tone, detail: string): HTMLEle
 
 function jerkLamp(z: number | undefined): { label: string; tone: Tone; detail: string } {
   if (z === undefined || !Number.isFinite(z)) {
-    return {
-      label: 'unknown',
-      tone: 'idle',
-      detail: 'No z-score yet — the expanding baseline has not filled.',
-    };
+    return { label: 'unknown', tone: 'idle', detail: 'The expanding baseline has not filled yet.' };
   }
   const magnitude = Math.abs(z);
   if (magnitude >= JERK_EXTREME) {
@@ -242,10 +383,68 @@ function percent(value: number | undefined, digits = 2): string {
   return `${(value * 100).toFixed(digits)}%`;
 }
 
+/** Truncation and decimation, stated rather than left to be inferred. */
+function coverageNote(history: {
+  count: number;
+  available: number;
+  truncated: boolean;
+  decimated: { from: number; to: number; method: string } | null;
+}): HTMLElement | null {
+  if (history.truncated) {
+    return stateBlock({
+      tone: 'warn',
+      title: 'This series was truncated',
+      detail:
+        `The window holds ${formatCount(history.available)} observations and the API ` +
+        `returned ${formatCount(history.count)}. What is drawn is a prefix of the range, ` +
+        'not the whole of it — narrow the range rather than reading the start date off the chart.',
+    });
+  }
+  if (history.decimated) {
+    return el(
+      'p',
+      { class: 'enginecard__detail' },
+      `${formatCount(history.decimated.from)} observations, drawn as ` +
+        `${formatCount(history.decimated.to)} points (${history.decimated.method.toUpperCase()}). ` +
+        'Shape-preserving: single-day crashes survive downsampling.',
+    );
+  }
+  return el(
+    'p',
+    { class: 'enginecard__detail' },
+    `${formatCount(history.count)} observations, drawn in full.`,
+  );
+}
+
+function renderRangeControl(current: RangeSpec, onSelect: (range: RangeSpec) => void): void {
+  if (!hosts.range) return;
+  replace(
+    hosts.range,
+    el(
+      'div',
+      { class: 'rangebar', role: 'group', 'aria-label': 'Chart range' },
+      ...RANGES.map((range) => {
+        const button = el(
+          'button',
+          {
+            type: 'button',
+            class: `rangebar__button${range.key === current.key ? ' rangebar__button--on' : ''}`,
+            'aria-pressed': range.key === current.key ? 'true' : 'false',
+          },
+          range.label,
+        );
+        button.addEventListener('click', () => onSelect(range));
+        return button;
+      }),
+    ),
+    el('p', { class: 'enginecard__detail' }, current.description),
+  );
+}
+
 function renderState(result: ApiResult<TwoLayerState>): TwoLayerState | null {
-  if (!stateHost) return null;
+  if (!hosts.state) return null;
   if (!result.ok) {
-    replace(stateHost, failureBlock(result, 'Kinematic state'));
+    replace(hosts.state, failureBlock(result, 'Kinematic state'));
     return null;
   }
 
@@ -253,7 +452,7 @@ function renderState(result: ApiResult<TwoLayerState>): TwoLayerState | null {
   const k = state.kinematics;
   if (k.as_of === null) {
     replace(
-      stateHost,
+      hosts.state,
       emptyBlock(
         'kinematic state',
         'The equity engine has not published features yet. It publishes on every daily run once its price backbone is backfilled.',
@@ -264,22 +463,17 @@ function renderState(result: ApiResult<TwoLayerState>): TwoLayerState | null {
 
   const f = k.features;
   const lamp = jerkLamp(f.jerk_z);
-
-  // price_filtered is a log level in the feature store; index points is what a
-  // reader wants on a tile, and exp() is the whole conversion.
   const level = f.price_filtered === undefined ? undefined : Math.exp(f.price_filtered);
 
-  const staleness = result.envelope.stale
-    ? stateBlock({
-        tone: 'warn',
-        title: 'This state is stale',
-        detail: `Last published ${formatDate(k.as_of)}. The daily run has not reported since.`,
-      })
-    : null;
-
   replace(
-    stateHost,
-    staleness,
+    hosts.state,
+    result.envelope.stale
+      ? stateBlock({
+          tone: 'warn',
+          title: 'This state is stale',
+          detail: `Last published ${formatDate(k.as_of)}. The daily run has not reported since.`,
+        })
+      : null,
     el(
       'div',
       { class: 'tiles' },
@@ -331,143 +525,311 @@ function renderState(result: ApiResult<TwoLayerState>): TwoLayerState | null {
   return state;
 }
 
-function renderRegime(state: TwoLayerState | null): void {
-  if (!regimeHost) return;
-  if (state?.regime) {
+function renderRegime(
+  history: ApiResult<RegimeHistory>,
+  state: ApiResult<AssetState>,
+): void {
+  if (!hosts.regime) return;
+
+  if (!history.ok) {
+    replace(hosts.regime, failureBlock(history, 'Regime history'));
+    return;
+  }
+  const data = history.envelope.data;
+  if (data.points.length === 0) {
     replace(
-      regimeHost,
-      el(
-        'div',
-        { class: 'badgerow' },
-        badge(state.regime.label, 'info'),
-        el('span', { class: 'enginecard__detail' }, `confidence ${formatValue(state.regime.confidence)}`),
-      ),
+      hosts.regime,
+      stateBlock({
+        tone: 'info',
+        title: 'No regime history yet',
+        detail:
+          'The regime model is fitted by the monthly refit job. Until it has run once, the engine publishes its features and declines to publish a state.',
+      }),
     );
     return;
   }
 
+  const latest = data.points.at(-1)!;
+  const badgeRow = el(
+    'div',
+    { class: 'badgerow' },
+    badge(latest.regime, REGIME_TONE[latest.regime] ?? 'idle'),
+    el(
+      'span',
+      { class: 'enginecard__detail' },
+      `${percent(latest.confidence, 1)} posterior on ${latest.as_of}` +
+        (data.model_version ? ` · ${data.model_version}` : ''),
+    ),
+  );
+
+  const legend = el(
+    'div',
+    { class: 'legend' },
+    ...REGIMES.map((regime) =>
+      el(
+        'span',
+        { class: 'legend__item' },
+        el('span', { class: `legend__swatch legend__swatch--${regime}` }),
+        regime,
+      ),
+    ),
+  );
+
+  replace(hosts.regime, badgeRow, regimeChart(data.points), legend, coverageNote(data));
+
+  // The current posterior as a table, since a stacked area is hard to read
+  // precisely at the right-hand edge — which is the part people care about.
+  if (state.ok) {
+    const components = state.envelope.data.components ?? {};
+    const rows = REGIMES.map((regime) =>
+      el(
+        'tr',
+        {},
+        el('td', { class: 'mono nowrap' }, regime),
+        el('td', { class: 'num mono' }, percent(latest.probabilities[regime] ?? 0, 1)),
+        el(
+          'td',
+          {},
+          components[`regime_mean_return`] !== undefined && regime === latest.regime
+            ? badge('current', REGIME_TONE[regime] ?? 'idle')
+            : '',
+        ),
+      ) as HTMLTableRowElement,
+    );
+    hosts.regime.appendChild(table(['Regime', 'P(regime)', ''], rows));
+  }
+}
+
+function renderTransitions(state: ApiResult<AssetState>): void {
+  if (!hosts.transitions) return;
+  if (!state.ok) {
+    replace(
+      hosts.transitions,
+      state.kind === 'not_implemented'
+        ? stateBlock({
+            tone: 'info',
+            title: 'No state published yet',
+            detail:
+              'The engine publishes its features on every run and declines to publish a state until the monthly refit has fitted the regime model.',
+          })
+        : failureBlock(state, 'Transition probabilities'),
+    );
+    return;
+  }
+
+  const data = state.envelope.data;
+  const components = data.components ?? {};
+  const dials = data.signals
+    .filter((s) => s.name.startsWith('p_transition_'))
+    .map((s) => {
+      const months = Number(s.name.replace('p_transition_', '').replace('m', ''));
+      return dial(months, s.value, components[`base_rate_${months}m`]);
+    });
+
+  const shap = Object.entries(components)
+    .filter(([key]) => key.startsWith('shap_'))
+    .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+    .slice(0, 8);
+
   replace(
-    regimeHost,
+    hosts.transitions,
+    dials.length
+      ? el('div', { class: 'dialrow' }, ...dials)
+      : emptyBlock('transition probabilities', 'This run published none.'),
     stateBlock({
       tone: 'info',
-      title: 'Not computed yet — sub-milestone P3-B',
+      title: 'Read these against the base rate, not against 50%',
       detail:
-        'The five-state HMM has not landed, so the engine publishes no regime and no AssetState. It declines rather than showing a placeholder: a regime badge is read as a market view, and there is no honest source for one until the model is fitted.',
-      hint: 'The model will be fitted on a daily series long enough to contain 2000, 2008 and 2020, then applied to the S&P feature path — because ten years of history containing one drawdown cannot define a crisis state.',
+        'An "entry" is the regime path moving into bear or crisis from anywhere else. The engine changes regime a few times a year, so entries are frequent and mostly minor — a high probability here is not a forecast of a crash. The tick on each dial marks the unconditional rate.',
     }),
+    shap.length
+      ? el(
+          'details',
+          { class: 'explain' },
+          el('summary', {}, 'What drove these probabilities (SHAP, log-odds)'),
+          el(
+            'dl',
+            { class: 'deflist' },
+            ...shap.map(([key, value]) =>
+              el(
+                'div',
+                { class: 'defrow' },
+                el('dt', { class: 'mono' }, key.replace('shap_', '')),
+                el('dd', { class: 'mono' }, formatValue(value)),
+              ),
+            ),
+          ),
+        )
+      : null,
   );
 }
 
 function renderPrice(
   close: ApiResult<AssetHistory>,
   filtered: ApiResult<AssetHistory>,
+  deep: ApiResult<SeriesDetail> | null,
+  range: RangeSpec,
 ): void {
-  if (!priceHost) return;
-  if (!close.ok) {
-    replace(priceHost, failureBlock(close, 'Price history'));
+  if (!hosts.price) return;
+
+  if (range.monthly) {
+    if (!deep || !deep.ok) {
+      const failure = deep && !deep.ok ? deep : { kind: 'unreachable', message: 'not requested' };
+      replace(hosts.price, failureBlock(failure, 'Shiller monthly history'));
+      return;
+    }
+    // Newest-first from /series; charts want time left to right.
+    const points: HistoryPoint[] = deep.envelope.data.observations
+      .map((o) => ({ as_of: o.obs_date, value: o.value, meta: null, written_at: null }))
+      .reverse();
+    replace(
+      hosts.price,
+      stateBlock({
+        tone: 'info',
+        title: 'Monthly resolution — a different series, not a wider window',
+        detail: `${DEEP_SERIES}: month-end closes of the S&P composite from 1871. The daily record begins in 1927; everything before that exists only at this resolution.`,
+      }),
+      lineChart([{ points, className: 'line' }], {
+        label: 'Shiller S&P composite, monthly, from 1871',
+        caption: 'index points, month-end',
+        log: range.log,
+      }),
+      el('p', { class: 'enginecard__detail' }, `${formatCount(points.length)} month-end closes.`),
+    );
     return;
   }
 
-  const rawPoints = close.envelope.data.points ?? [];
-  const filteredPoints = filtered.ok ? (filtered.envelope.data.points ?? []) : [];
-  if (rawPoints.length === 0) {
-    replace(priceHost, emptyBlock('price history', 'The engine has not published a price path yet.'));
+  if (!close.ok) {
+    replace(hosts.price, failureBlock(close, 'Price history'));
+    return;
+  }
+
+  const raw = close.envelope.data;
+  if (raw.points.length === 0) {
+    replace(
+      hosts.price,
+      emptyBlock('price history', 'The engine has not published a price path for this range.'),
+    );
     return;
   }
 
   replace(
-    priceHost,
+    hosts.price,
     lineChart(
       [
-        { points: rawPoints, className: 'line line--muted', label: 'close' },
-        { points: filteredPoints, className: 'line', label: 'filtered' },
+        { points: raw.points, className: 'line line--muted' },
+        { points: filtered.ok ? filtered.envelope.data.points : [], className: 'line' },
       ],
       {
-        label: `S&P 500 close and Kalman-filtered level over ${rawPoints.length} sessions`,
+        label: `S&P 500 close and Kalman-filtered level, ${range.label}`,
         caption: 'index points',
+        log: range.log,
       },
     ),
-    legend([
-      { label: 'filtered level (Kalman, filtered estimate)', swatch: 'legend__swatch--accent' },
-      { label: 'raw close', swatch: 'legend__swatch--idle' },
-    ]),
     el(
-      'p',
-      { class: 'enginecard__detail' },
-      `${rawPoints.length} sessions through ${rawPoints[rawPoints.length - 1]?.as_of}`,
+      'div',
+      { class: 'legend' },
+      el(
+        'span',
+        { class: 'legend__item' },
+        el('span', { class: 'legend__swatch legend__swatch--accent' }),
+        'filtered level (Kalman, filtered estimate)',
+      ),
+      el(
+        'span',
+        { class: 'legend__item' },
+        el('span', { class: 'legend__swatch legend__swatch--idle' }),
+        'raw close',
+      ),
     ),
+    coverageNote(raw),
   );
 }
 
 function renderKinematics(
   velocity: ApiResult<AssetHistory>,
   acceleration: ApiResult<AssetHistory>,
+  range: RangeSpec,
 ): void {
-  if (!kinematicsHost) return;
-  if (!velocity.ok) {
-    replace(kinematicsHost, failureBlock(velocity, 'Velocity history'));
-    return;
-  }
-
-  const v = velocity.envelope.data.points ?? [];
-  const a = acceleration.ok ? (acceleration.envelope.data.points ?? []) : [];
-  if (v.length === 0) {
+  if (!hosts.kinematics) return;
+  if (range.monthly) {
     replace(
-      kinematicsHost,
-      emptyBlock('kinematics', 'The engine has not published a velocity path yet.'),
+      hosts.kinematics,
+      stateBlock({
+        tone: 'info',
+        title: 'Not computed at monthly resolution',
+        detail:
+          'The kinematic features are built on the daily publication series. The 1871 tier is a different series at a different resolution, so its velocity would not be the same quantity.',
+      }),
     );
     return;
   }
+  if (!velocity.ok) {
+    replace(hosts.kinematics, failureBlock(velocity, 'Velocity history'));
+    return;
+  }
+  const v = velocity.envelope.data;
+  if (v.points.length === 0) {
+    replace(hosts.kinematics, emptyBlock('kinematics', 'Nothing published for this range.'));
+    return;
+  }
 
-  // Two different units on one axis would be meaningless, so they get two
-  // charts sharing a date range rather than a shared, dishonest scale.
   replace(
-    kinematicsHost,
-    lineChart([{ points: v, className: 'line', label: 'velocity' }], {
+    hosts.kinematics,
+    lineChart([{ points: v.points, className: 'line' }], {
       label: 'Annualized velocity of the filtered trend',
       caption: 'velocity — annualized log drift',
       zeroLine: true,
     }),
-    lineChart([{ points: a, className: 'line line--alt', label: 'acceleration' }], {
-      label: 'Acceleration of the filtered trend',
-      caption: 'acceleration — per year squared',
-      zeroLine: true,
-    }),
+    lineChart(
+      [{ points: acceleration.ok ? acceleration.envelope.data.points : [], className: 'line line--alt' }],
+      {
+        label: 'Acceleration of the filtered trend',
+        caption: 'acceleration — per year squared',
+        zeroLine: true,
+      },
+    ),
+    coverageNote(v),
   );
 }
 
-function renderJerk(result: ApiResult<AssetHistory>): void {
-  if (!jerkHost) return;
-  if (!result.ok) {
-    replace(jerkHost, failureBlock(result, 'Jerk indicator'));
-    return;
-  }
-
-  const points = result.envelope.data.points ?? [];
-  if (points.length === 0) {
+function renderJerk(result: ApiResult<AssetHistory>, range: RangeSpec): void {
+  if (!hosts.jerk) return;
+  if (range.monthly) {
     replace(
-      jerkHost,
-      emptyBlock(
-        'jerk indicator',
-        'No z-score has been published yet — the expanding baseline has not filled.',
-      ),
+      hosts.jerk,
+      stateBlock({
+        tone: 'info',
+        title: 'Not computed at monthly resolution',
+        detail: 'The jerk indicator is built on the daily publication series.',
+      }),
     );
     return;
   }
+  if (!result.ok) {
+    replace(hosts.jerk, failureBlock(result, 'Jerk indicator'));
+    return;
+  }
 
-  const last = points[points.length - 1];
+  const data = result.envelope.data;
+  if (data.points.length === 0) {
+    replace(hosts.jerk, emptyBlock('jerk indicator', 'Nothing published for this range.'));
+    return;
+  }
+
+  const last = data.points.at(-1);
   const lamp = jerkLamp(last?.value);
-  const elevated = points.filter((p) => Math.abs(p.value) >= JERK_ELEVATED).length;
+  const elevated = data.points.filter((p) => Math.abs(p.value) >= JERK_ELEVATED).length;
 
   replace(
-    jerkHost,
+    hosts.jerk,
     el(
       'div',
       { class: 'badgerow' },
       badge(lamp.label, lamp.tone),
       el('span', { class: 'enginecard__detail' }, `${lamp.detail} As of ${last?.as_of}.`),
     ),
-    lineChart([{ points, className: 'line', label: 'jerk z-score' }], {
+    lineChart([{ points: data.points, className: 'line' }], {
       label: 'Jerk z-score against its expanding baseline',
       caption: 'jerk z-score — dashed lines at ±2 and ±3',
       zeroLine: true,
@@ -476,27 +838,23 @@ function renderJerk(result: ApiResult<AssetHistory>): void {
     el(
       'p',
       { class: 'enginecard__detail' },
-      `${elevated} of ${points.length} published sessions were elevated or beyond.`,
+      `${elevated} of ${formatCount(data.points.length)} drawn points were elevated or beyond.`,
     ),
   );
 }
 
 function renderForces(result: ApiResult<ForceHistory>, snapshot: TwoLayerState | null): void {
-  if (!forcesHost) return;
+  if (!hosts.forces) return;
   if (!result.ok) {
-    replace(forcesHost, failureBlock(result, 'Force scores'));
+    replace(hosts.forces, failureBlock(result, 'Force scores'));
     return;
   }
 
   const scores = snapshot?.forces.scores ?? {};
   const components = snapshot?.forces.components ?? {};
   const names = Object.keys(scores).sort();
-
   if (names.length === 0) {
-    replace(
-      forcesHost,
-      emptyBlock('force scores', 'The factor pipeline has not published scores yet.'),
-    );
+    replace(hosts.forces, emptyBlock('force scores', 'The factor pipeline has not published scores yet.'));
     return;
   }
 
@@ -539,96 +897,124 @@ function renderForces(result: ApiResult<ForceHistory>, snapshot: TwoLayerState |
   });
 
   replace(
-    forcesHost,
+    hosts.forces,
     table(['Force', 'Score (0–100)', 'Reading', 'Components'], rows),
     el(
       'p',
       { class: 'enginecard__detail' },
-      `Scored on ${snapshot?.forces.as_of ?? 'an unknown date'} · ${result.envelope.data.count} historical points available from /forces`,
+      `Scored on ${snapshot?.forces.as_of ?? 'an unknown date'}.`,
     ),
   );
 }
 
-function renderProvenance(state: TwoLayerState | null): void {
-  if (!provenanceHost) return;
+function renderProvenance(state: TwoLayerState | null, range: RangeSpec): void {
+  if (!hosts.provenance) return;
 
   const version = state?.kinematics.model_version ?? null;
-  // The version carries its calibration tag: equity-1.0.0+cal.<series slug>.
   const calibration = version?.split('+cal.')[1] ?? null;
+  const isProxy = calibration !== null && !calibration.includes('gspc') && !calibration.includes('spx');
 
   replace(
-    provenanceHost,
+    hosts.provenance,
     el(
       'p',
       { class: 'prose' },
       'Three price series feed this engine and they are not interchangeable. The ',
       el('strong', {}, 'publication'),
-      ' series is what everything on this page describes. A separate ',
+      ' series is what the kinematics describe. A separate ',
       el('strong', {}, 'calibration'),
-      ' series — longer, and reaching back through the crises the publication series does not — is what the regime model will be fitted on in the next sub-milestone. A monthly ',
+      ' series — longer, reaching back through the crises the publication series does not — is what the regime model is fitted on. A monthly ',
       el('strong', {}, 'deep-history'),
-      ' series back to 1871 is the only basis for the tail estimates after that.',
+      ' series back to 1871 is the only basis for the tail estimates.',
     ),
     el(
       'p',
       { class: 'prose' },
-      'Which series played which part is recorded in the model version itself, so a number can never be traced to the wrong index: ',
-      version ? el('code', {}, version) : el('em', {}, 'no version published yet'),
-      calibration
-        ? el(
-            'span',
-            {},
-            ' — the suffix names the calibration series (',
-            el('code', {}, calibration),
-            ').',
-          )
-        : '',
+      el('strong', {}, 'On screen now: '),
+      range.monthly
+        ? `${DEEP_SERIES} — month-end closes from 1871. Monthly, not daily.`
+        : `FRED:SP500 kinematics over ${range.description}. The regime model is fitted on the calibration series below.`,
     ),
-    calibration && !calibration.includes('spx')
+    el(
+      'p',
+      { class: 'prose' },
+      'Which series played which part is recorded in the model version, so a number can never be traced to the wrong index: ',
+      version ? el('code', {}, version) : el('em', {}, 'no version published yet'),
+      calibration ? el('span', {}, ' — the suffix names the calibration series.') : '',
+    ),
+    isProxy
       ? stateBlock({
           tone: 'warn',
           title: 'The calibration series is a proxy, not the S&P 500',
           detail:
-            'Daily S&P history before 2016 is not currently reachable, so a longer, more volatile index stands in for the fitted parameters. Nothing on this page depends on it yet — the kinematics above are computed on the S&P itself — but every fitted parameter from the next sub-milestone onwards will carry this caveat.',
+            'A longer, more volatile index is standing in for the fitted parameters. Every fitted number on this page carries that caveat.',
         })
-      : null,
+      : calibration
+        ? stateBlock({
+            tone: 'info',
+            title: 'The regime model is fitted on the S&P itself',
+            detail:
+              'The daily record back to 1927 fills the backfill role, so 1929, 1987, 2000, 2008 and 2020 are all in sample on the same index this page publishes against.',
+          })
+        : null,
   );
 }
 
 // ------------------------------------------------------------------- main
 
-async function main(): Promise<void> {
-  for (const host of [
-    stateHost,
-    regimeHost,
-    priceHost,
-    kinematicsHost,
-    jerkHost,
-    forcesHost,
-    provenanceHost,
-  ]) {
-    if (host) replace(host, loadingBlock('FinEquity'));
+async function load(range: RangeSpec): Promise<void> {
+  for (const target of Object.values(hosts)) {
+    if (target && target !== hosts.range) replace(target, loadingBlock(`FinEquity (${range.label})`));
   }
 
-  const history = (metric: string) => getAssetHistory(ASSET, metric, { limit: HISTORY_LIMIT });
+  const from = fromDate(range);
+  const history = (metric: string) =>
+    getAssetHistory(ASSET, metric, { from, points: range.points });
 
-  const [state, close, filtered, velocity, acceleration, jerk, forces] = await Promise.all([
-    getTwoLayerState(),
-    history('price_close'),
-    history('price_filtered'),
-    history('velocity'),
-    history('acceleration'),
-    history('jerk_z'),
-    getForces({ limit: 200 }),
-  ]);
+  const [state, twoLayer, regime, close, filtered, velocity, acceleration, jerk, forces, deep] =
+    await Promise.all([
+      getAssetState(ASSET),
+      getTwoLayerState(),
+      getRegimeHistory({ asset: ASSET, from, points: Math.min(range.points, 1200) }),
+      range.monthly ? Promise.resolve(null) : history('price_close'),
+      range.monthly ? Promise.resolve(null) : history('price_filtered'),
+      range.monthly ? Promise.resolve(null) : history('velocity'),
+      range.monthly ? Promise.resolve(null) : history('acceleration'),
+      range.monthly ? Promise.resolve(null) : history('jerk_z'),
+      getForces({ limit: 200 }),
+      range.monthly ? getSeries(DEEP_SERIES, { limit: 3000 }) : Promise.resolve(null),
+    ]);
 
-  const snapshot = renderState(state);
-  renderRegime(snapshot);
-  renderPrice(close, filtered);
-  renderKinematics(velocity, acceleration);
-  renderJerk(jerk);
+  const snapshot = renderState(twoLayer);
+  renderRegime(regime, state);
+  renderTransitions(state);
+  renderPrice(close ?? regimePlaceholder(), filtered ?? regimePlaceholder(), deep, range);
+  renderKinematics(velocity ?? regimePlaceholder(), acceleration ?? regimePlaceholder(), range);
+  renderJerk(jerk ?? regimePlaceholder(), range);
   renderForces(forces, snapshot);
-  renderProvenance(snapshot);
+  renderProvenance(snapshot, range);
+}
+
+/** Stand-in for the daily series when the monthly tier is selected. */
+function regimePlaceholder(): ApiResult<AssetHistory> {
+  return { ok: false, kind: 'not_found', message: 'not requested for this range' };
+}
+
+async function main(): Promise<void> {
+  let current = rangeFromUrl();
+
+  const select = (range: RangeSpec) => {
+    if (range.key === current.key) return;
+    current = range;
+    writeRangeToUrl(range);
+    renderRangeControl(current, select);
+    void load(current);
+  };
+
+  renderRangeControl(current, select);
+  await load(current);
 }
 
 void main();
+
+export { DEFAULT_RANGE };

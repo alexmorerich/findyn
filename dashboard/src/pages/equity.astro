@@ -7,8 +7,23 @@ import Base from '../layouts/Base.astro';
   description="Market kinematics for the S&P 500 — the Kalman-filtered price level, its velocity and acceleration, and the jerk instability indicator, from the FinDynamics equity engine."
   eyebrow="Asset engine"
   heading="FinEquity — market kinematics"
-  intro="Where the market is, how fast it is moving, and whether that movement is strengthening or weakening. This is the first of three sub-milestones: the causal feature path. Regimes, the instability index and forecast distributions come next, and the panels for them are absent rather than empty. Everything on this page is read from the live API by your browser."
+  intro="Where the market is, how fast it is moving, whether that movement is strengthening or weakening, and which regime it is in. The daily record reaches back to 1927 and the monthly composite to 1871 — use the range control to see it. Everything on this page is read from the live API by your browser."
 >
+  <section class="panel" aria-labelledby="range-h">
+    <div class="panel__head">
+      <h2 id="range-h">Range</h2>
+      <span class="panel__note">?range= &middot; every chart moves together</span>
+    </div>
+    <p class="prose">
+      Each range is a separate request for that window, not a filter over one big
+      payload &mdash; and the server downsamples to a point count a screen can actually show,
+      preserving single-day crashes rather than sampling them away. Past twenty years the price
+      axis is logarithmic: the index goes from 17 to over 7,000, and on a linear axis the first
+      seventy years are a flat line on the floor.
+    </p>
+    <div id="equity-range" style="margin-top:0.85rem"></div>
+  </section>
+
   <section class="panel" aria-labelledby="k-h">
     <div class="panel__head">
       <h2 id="k-h">Kinematic state K(t)</h2>
@@ -25,10 +40,32 @@ import Base from '../layouts/Base.astro';
 
   <section class="panel" aria-labelledby="regime-h">
     <div class="panel__head">
-      <h2 id="regime-h">Regime</h2>
-      <span class="panel__note">Layer B &middot; sub-milestone P3-B</span>
+      <h2 id="regime-h">Regime posterior</h2>
+      <span class="panel__note">/api/v1/regime</span>
     </div>
-    <div id="equity-regime"></div>
+    <p class="prose">
+      The five-state hidden Markov model of &sect;9, as a distribution rather than a label.
+      Fitted on the daily record back to 1927 and applied to the published index; the states are
+      mapped to names by a documented rule over their realized mean returns, and the mapping is
+      asserted stable across refits. Probabilities are <strong>filtered</strong> &mdash; each date
+      uses only what was known by then, never the smoothed pass that conditions on the whole sample.
+    </p>
+    <div id="equity-regime" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="trans-h">
+    <div class="panel__head">
+      <h2 id="trans-h">Transition probability</h2>
+      <span class="panel__note">AssetState.signals &middot; XGBoost + isotonic</span>
+    </div>
+    <p class="prose">
+      Calibrated probability that the regime <em>enters</em> bear or crisis within each horizon,
+      from a gradient-boosted classifier trained with purged cross-validation and a six-month
+      embargo, then isotonically calibrated on held-out folds only. Read each against the tick
+      marking its unconditional rate. These horizons are nested events, so the shorter can never
+      exceed the longer.
+    </p>
+    <div id="equity-transitions" style="margin-top:0.85rem"></div>
   </section>
 
   <section class="panel" aria-labelledby="price-h">

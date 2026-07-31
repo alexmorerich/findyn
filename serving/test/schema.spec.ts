@@ -73,14 +73,9 @@ describe('D1 schema (FINDYN_V1_SPEC.md §7)', () => {
   it('adds an asset column to the v1 output tables, defaulting to SPX (0004)', async () => {
     // Additive only: existing rows are S&P500 by definition, so the default
     // makes the migration safe for queries that never mention the column.
-    // derived_features is excluded — 0005 rebuilt it with asset in the primary
-    // key and a required value; see the test below.
-    for (const table of [
-      'force_scores',
-      'regime_state',
-      'instability_index',
-      'forecast_distribution',
-    ]) {
+    // derived_features (0005) and regime_state (0006) are excluded — both were
+    // rebuilt with asset in the primary key and a required value; see below.
+    for (const table of ['force_scores', 'instability_index', 'forecast_distribution']) {
       const row = await env.DB.prepare(
         `SELECT dflt_value FROM pragma_table_info('${table}') WHERE name = 'asset'`,
       ).first<{ dflt_value: string }>();
@@ -98,6 +93,16 @@ describe('D1 schema (FINDYN_V1_SPEC.md §7)', () => {
     ).all<{ name: string }>();
 
     expect(results.map((r) => r.name)).toEqual(['asset', 'date', 'feature', 'model_version']);
+  });
+
+  it('keys regime_state by asset as well (0006)', async () => {
+    // `bear` and `crisis` are names a second engine would also publish, and a
+    // shared row would silently overwrite equity's posterior.
+    const { results } = await env.DB.prepare(
+      `SELECT name FROM pragma_table_info('regime_state') WHERE pk > 0 ORDER BY pk`,
+    ).all<{ name: string }>();
+
+    expect(results.map((r) => r.name)).toEqual(['asset', 'date', 'regime', 'model_version']);
   });
 
   it('accepts two engines publishing the same feature name on one date', async () => {

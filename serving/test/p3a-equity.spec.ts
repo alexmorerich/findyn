@@ -193,7 +193,7 @@ describe('P3-A — /state and /forces (§13)', () => {
     expect(body.data.count).toBe(2);
     // Ascending on the way out: a chart wants time to move left to right.
     expect(body.data.points.map((p) => p.as_of)).toEqual(['2026-07-28', '2026-07-29']);
-    expect(body.data.points[1].components).toEqual({ 'FRED:M2SL': 56.0 });
+    expect(body.data.points[1]?.components).toEqual({ 'FRED:M2SL': 56.0 });
   });
 
   it('rejects an unknown force with 400 rather than serving an empty series', async () => {

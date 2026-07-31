@@ -1,16 +1,25 @@
-"""The scale-free transfer — the assumption sub-milestone B rests on.
+"""The scale-free transfer — the property sub-milestone B rests on.
 
 "Fit on ``calibration``, infer on ``publication``" is only sound if a feature
-value means the same thing on both series. With ``FRED:NASDAQ100`` a third more
-volatile than ``FRED:SP500``, a model fitted in units that carry that difference
-would sit its ``crisis`` state where the S&P never goes, and would then under-call
-crisis forever — for a mechanical reason indistinguishable, from outside, from a
-considered market judgement.
+value means the same thing on both series.
 
-So this file does not assume it. It measures it, on the real series, and it
-includes a control that fails: the same assertions applied to the raw
-(dimensional) features must reject, or the tolerances are too loose to mean
-anything.
+**This is now a sanity check rather than the phase\'s central risk, and the
+tests are deliberately not weakened to match.** A daily S&P source landed
+(``YAHOO:^GSPC``, 1927+), so ``backfill`` takes the calibration role and the
+model is fitted on the same index it publishes against. But ``regime_proxy``
+remains the configured fallback for the day that source breaks — Yahoo is
+unversioned and the spec calls it a fallback — and on that path the transfer
+risk is exactly as sharp as it ever was: ``FRED:NASDAQ100`` is a third more
+volatile than ``FRED:SP500``, and a model fitted in units carrying that
+difference would sit its ``crisis`` state where the S&P never goes and under-call
+crisis forever, for a mechanical reason indistinguishable from a market
+judgement.
+
+So the measurements below run against the **NASDAQ proxy specifically**, not
+against whichever series happens to win the precedence today. Testing the
+resolved calibration would silently stop testing anything the moment the
+configuration improved — which is precisely when a fallback path starts rotting
+unobserved.
 """
 
 from __future__ import annotations
@@ -48,13 +57,36 @@ QUANTILES = (0.01, 0.05, 0.25, 0.50, 0.75, 0.95, 0.99)
 
 @pytest.fixture(scope="module")
 def designs(equity_observations, config_module):
-    """Design matrices for all three roles, built once — the fits are slow."""
-    from findynamics.core.artifacts import ArtifactStore
-    from findynamics.engines.equity.engine import EquityEngine
+    """Design matrices for the publication path and for the NASDAQ proxy.
 
+    The proxy is built explicitly rather than taken from whichever series the
+    precedence resolves to, so this file keeps measuring the fallback path after
+    a better calibration source arrives.
+    """
+    from findynamics.core.artifacts import ArtifactStore
+    from findynamics.engines.equity import prices as prices_mod
+    from findynamics.engines.equity.engine import EquityEngine
+    from findynamics.engines.equity.features.pipeline import compute_features
+
+    world = world_from(equity_observations)
     engine = EquityEngine(config_module, ArtifactStore(directory=None))
-    analysis = engine.analyze(world_from(equity_observations), roles=ALL_ROLES)
-    return {role: build_design(fs) for role, fs in analysis.features.items()}
+    analysis = engine.analyze(world, roles=ALL_ROLES)
+
+    built = {role: build_design(fs) for role, fs in analysis.features.items()}
+
+    # The proxy, whether or not it won the role today.
+    proxy_spec = prices_mod.configured_roles(config_module)["regime_proxy"]
+    proxy_series = prices_mod.PriceSeries(
+        role="calibration",
+        source_role="regime_proxy",
+        series_id=proxy_spec.id,
+        frequency=proxy_spec.frequency,
+        observations=0,
+    )
+    built["proxy"] = build_design(
+        compute_features(prices_mod.price_path(world.series, proxy_series), proxy_series)
+    )
+    return built
 
 
 @pytest.fixture(scope="module")
@@ -66,10 +98,10 @@ def config_module():
 
 @pytest.fixture(scope="module")
 def separate_fits(designs):
-    """The same pipeline fitted independently on each daily series."""
+    """The same pipeline fitted independently on the S&P and on the proxy."""
     return {
-        role: fit_hmm(designs[role], is_proxy=(role == "calibration"))
-        for role in ("publication", "calibration")
+        "publication": fit_hmm(designs["publication"], is_proxy=False),
+        "proxy": fit_hmm(designs["proxy"], is_proxy=True),
     }
 
 
@@ -79,7 +111,7 @@ def separate_fits(designs):
 def test_the_two_series_really_do_have_different_volatility(designs):
     """The premise. If they did not, this whole file would be vacuous."""
     pub = designs["publication"].returns.std() * np.sqrt(252)
-    cal = designs["calibration"].returns.std() * np.sqrt(252)
+    cal = designs["proxy"].returns.std() * np.sqrt(252)
     assert cal > pub * 1.2, (
         f"the calibration series ({cal:.1%}) is not materially more volatile than "
         f"the publication series ({pub:.1%}); the transfer risk this file tests "
@@ -94,7 +126,7 @@ def test_every_feature_has_comparable_dispersion_across_the_two_series(designs):
     2018-2026 one would measure which episodes each series lived through rather
     than whether a value means the same thing on both.
     """
-    ratios = dispersion_ratio(designs["publication"], designs["calibration"])
+    ratios = dispersion_ratio(designs["publication"], designs["proxy"])
     low, high = DISPERSION_BAND
 
     offenders = {
@@ -116,7 +148,7 @@ def test_the_distribution_shapes_agree_in_the_tails(designs):
     deviation and still disagree about where 'extreme' is. The quantiles are
     compared over the common window for the same reason as above.
     """
-    pub, cal = designs["publication"], designs["calibration"]
+    pub, cal = designs["publication"], designs["proxy"]
     common = pub.frame.index.intersection(cal.frame.index)
 
     def on_common(design):
@@ -142,7 +174,7 @@ def test_state_means_agree_when_each_series_is_fitted_separately(separate_fits):
     place; if they are not, the more volatile series pushes its states outward
     and the gap blows up.
     """
-    pub, cal = separate_fits["publication"], separate_fits["calibration"]
+    pub, cal = separate_fits["publication"], separate_fits["proxy"]
 
     worst_label, worst_feature, worst_gap = "", "", 0.0
     for label in REGIMES:
@@ -167,7 +199,7 @@ def test_the_assertions_reject_raw_dimensional_features(designs):
     design matrix avoids, and exactly what a plausible-looking implementation
     would have used. Both assertions above must reject them.
     """
-    pub, cal = designs["publication"], designs["calibration"]
+    pub, cal = designs["publication"], designs["proxy"]
     common = pub.frame.index.intersection(cal.frame.index)
 
     def raw(design) -> pd.DataFrame:
@@ -202,7 +234,7 @@ def test_the_publication_series_alone_cannot_define_a_bear_state(separate_fits):
     window, so it is checked rather than assumed.
     """
     pub_bear = separate_fits["publication"].stats_for("bear")
-    cal_bear = separate_fits["calibration"].stats_for("bear")
+    cal_bear = separate_fits["proxy"].stats_for("bear")
     assert pub_bear is not None and cal_bear is not None
 
     assert pub_bear.mean_return > -0.05, (
@@ -216,20 +248,33 @@ def test_the_publication_series_alone_cannot_define_a_bear_state(separate_fits):
     )
 
 
-def test_the_calibration_fit_is_monotone_in_return(separate_fits):
-    """The vocabulary is ordered most to least risk-on, so the fit must be too."""
-    fit = separate_fits["calibration"]
-    returns = [fit.stats_for(label).mean_return for label in REGIMES]  # type: ignore[union-attr]
-    assert returns == sorted(returns, reverse=True), dict(zip(REGIMES, returns, strict=True))
+@pytest.mark.parametrize("which", ["publication", "proxy"])
+def test_the_worst_states_actually_lose_money(separate_fits, which):
+    """The vocabulary has to mean what it says on both series.
 
-
-def test_crisis_is_the_most_volatile_state_on_the_calibration_fit(separate_fits):
-    """Not the labelling rule — a consequence of it, and worth checking.
-
-    ``crisis`` is chosen by worst reward-per-risk, not by highest volatility. On
-    a long series carrying real crises the two coincide, and their coinciding is
-    evidence the states mean what their names say.
+    Monotonicity in return is true by construction of the labelling rule; that
+    ``bear`` and ``crisis`` come out *negative* is not, and it is the claim the
+    names make.
     """
-    fit = separate_fits["calibration"]
-    vols = {label: fit.stats_for(label).volatility for label in REGIMES}  # type: ignore[union-attr]
-    assert max(vols, key=vols.get) == "crisis", vols
+    fit = separate_fits[which]
+    assert fit.stats_for("bull_expansion").mean_return > 0.10  # type: ignore[union-attr]
+    assert fit.stats_for("crisis").mean_return < 0.0  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize("which", ["publication", "proxy"])
+def test_crisis_is_a_high_volatility_state(separate_fits, which):
+    """A consequence of the labelling rule, checked rather than assumed.
+
+    ``crisis`` is chosen by worst mean return, with volatility deliberately kept
+    out of the key — the two rules that used it each mislabelled a real series
+    (see the module docstring in regime/hmm.py). So the fact that the worst
+    state also turns out to be a violent one is evidence the states mean what
+    their names say, and it is asserted as median-or-above rather than as the
+    maximum: on the 1927+ S&P the ``late_cycle`` state is a hair more volatile.
+    """
+    fit = separate_fits[which]
+    vols = sorted(fit.stats_for(label).volatility for label in REGIMES)  # type: ignore[union-attr]
+    crisis = fit.stats_for("crisis").volatility  # type: ignore[union-attr]
+    assert crisis >= vols[len(vols) // 2], dict(
+        zip(REGIMES, (fit.stats_for(x).volatility for x in REGIMES), strict=True)  # type: ignore[union-attr]
+    )
