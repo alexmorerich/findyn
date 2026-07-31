@@ -54,6 +54,8 @@ import { DEFAULT_RANGE, RANGES, fromDate, rangeFromUrl, writeRangeToUrl, type Ra
 
 const ASSET = 'equity';
 const DEEP_SERIES = 'SHILLER:NOMINAL_PRICE';
+/** The daily S&P record, 1927+. Same index as the publication series. */
+const DAILY_DEEP_SERIES = 'YAHOO:^GSPC';
 
 /** §3.1 thresholds, mirroring features/kinematics.py. */
 const JERK_ELEVATED = 2.0;
@@ -672,29 +674,48 @@ function renderPrice(
 ): void {
   if (!hosts.price) return;
 
-  if (range.monthly) {
+  // Deep daily and monthly both read `macro_series` directly: the engine's own
+  // price metric is the publication series, which FRED caps at ten years.
+  if (range.deep || range.monthly) {
     if (!deep || !deep.ok) {
       const failure = deep && !deep.ok ? deep : { kind: 'unreachable', message: 'not requested' };
       replace(hosts.price, failureBlock(failure, 'Shiller monthly history'));
       return;
     }
-    // Newest-first from /series; charts want time left to right.
-    const points: HistoryPoint[] = deep.envelope.data.observations
-      .map((o) => ({ as_of: o.obs_date, value: o.value, meta: null, written_at: null }))
-      .reverse();
+    const body = deep.envelope.data;
+    const points: HistoryPoint[] = body.observations.map((o) => ({
+      as_of: o.obs_date,
+      value: o.value,
+      meta: null,
+      written_at: null,
+    }));
+
     replace(
       hosts.price,
-      stateBlock({
-        tone: 'info',
-        title: 'Monthly resolution — a different series, not a wider window',
-        detail: `${DEEP_SERIES}: month-end closes of the S&P composite from 1871. The daily record begins in 1927; everything before that exists only at this resolution.`,
-      }),
+      range.monthly
+        ? stateBlock({
+            tone: 'info',
+            title: 'Monthly resolution — a different series, not a wider window',
+            detail: `${DEEP_SERIES}: month-end closes of the S&P composite from 1871. The daily record begins in 1927; everything before that exists only at this resolution.`,
+          })
+        : stateBlock({
+            tone: 'info',
+            title: 'Read straight from the observation store',
+            detail: `${DAILY_DEEP_SERIES}: daily closes of the same index the engine publishes against. The engine's own price metric comes from FRED:SP500, which is licence-capped to a rolling ten years — so past that, this is the record. The filtered overlay is not drawn here, because the model runs on the publication series and a line that was never computed should not appear.`,
+          }),
       lineChart([{ points, className: 'line' }], {
-        label: 'Shiller S&P composite, monthly, from 1871',
-        caption: 'index points, month-end',
+        label: range.monthly
+          ? 'Shiller S&P composite, monthly, from 1871'
+          : `S&P 500 daily closes, ${range.label}`,
+        caption: range.monthly ? 'index points, month-end' : 'index points, daily close',
         log: range.log,
       }),
-      el('p', { class: 'enginecard__detail' }, `${formatCount(points.length)} month-end closes.`),
+      coverageNote({
+        count: points.length,
+        available: body.available,
+        truncated: body.truncated,
+        decimated: body.decimated,
+      }),
     );
     return;
   }
@@ -933,7 +954,9 @@ function renderProvenance(state: TwoLayerState | null, range: RangeSpec): void {
       el('strong', {}, 'On screen now: '),
       range.monthly
         ? `${DEEP_SERIES} — month-end closes from 1871. Monthly, not daily.`
-        : `FRED:SP500 kinematics over ${range.description}. The regime model is fitted on the calibration series below.`,
+        : range.deep
+          ? `${DAILY_DEEP_SERIES} daily closes for the price chart (${range.description}); the kinematics below remain FRED:SP500, which is where the model runs.`
+          : `FRED:SP500 for both the price chart and the kinematics, over ${range.description}.`,
     ),
     el(
       'p',
@@ -976,13 +999,17 @@ async function load(range: RangeSpec): Promise<void> {
       getAssetState(ASSET),
       getTwoLayerState(),
       getRegimeHistory({ asset: ASSET, from, points: Math.min(range.points, 1200) }),
-      range.monthly ? Promise.resolve(null) : history('price_close'),
-      range.monthly ? Promise.resolve(null) : history('price_filtered'),
+      range.deep || range.monthly ? Promise.resolve(null) : history('price_close'),
+      range.deep || range.monthly ? Promise.resolve(null) : history('price_filtered'),
       range.monthly ? Promise.resolve(null) : history('velocity'),
       range.monthly ? Promise.resolve(null) : history('acceleration'),
       range.monthly ? Promise.resolve(null) : history('jerk_z'),
       getForces({ limit: 200 }),
-      range.monthly ? getSeries(DEEP_SERIES, { limit: 3000 }) : Promise.resolve(null),
+      range.monthly
+        ? getSeries(DEEP_SERIES, { points: range.points })
+        : range.deep
+          ? getSeries(DAILY_DEEP_SERIES, { from, points: range.points })
+          : Promise.resolve(null),
     ]);
 
   const snapshot = renderState(twoLayer);

@@ -93,13 +93,23 @@ api.get('/series/:id{.+}', async (c) => {
   if (!metadata) {
     return c.json({ error: 'not_found', message: `unknown series: ${seriesId}` }, 404);
   }
-  const observations = await getObservations(c.env, seriesId, {
+  const result = await getObservations(c.env, seriesId, {
     from: c.req.query('from'),
     to: c.req.query('to'),
     limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined,
+    points: c.req.query('points') ? Number(c.req.query('points')) : undefined,
   });
   return c.json(
-    envelope({ metadata, observations }, { as_of: observations[0]?.obs_date ?? null }),
+    envelope(
+      {
+        metadata,
+        observations: result.observations,
+        available: result.available,
+        truncated: result.truncated,
+        decimated: result.decimated,
+      },
+      { as_of: result.observations.at(-1)?.obs_date ?? null },
+    ),
   );
 });
 

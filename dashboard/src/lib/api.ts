@@ -120,8 +120,11 @@ export interface Observation {
 
 export interface SeriesDetail {
   metadata: SeriesMetadata;
-  /** Newest first, as returned by the API. */
+  /** Oldest first, and downsampled server-side when `points` was requested. */
   observations: Observation[];
+  available: number;
+  truncated: boolean;
+  decimated: { from: number; to: number; method: string } | null;
 }
 
 export interface PitAvailable {
@@ -374,12 +377,13 @@ export const getSeriesList = () => apiGet<SeriesList>('/series');
 
 export function getSeries(
   seriesId: string,
-  opts: { from?: string; to?: string; limit?: number } = {},
+  opts: { from?: string; to?: string; limit?: number; points?: number } = {},
 ): Promise<ApiResult<SeriesDetail>> {
   const query = new URLSearchParams();
   if (opts.from) query.set('from', opts.from);
   if (opts.to) query.set('to', opts.to);
   if (opts.limit !== undefined) query.set('limit', String(opts.limit));
+  if (opts.points !== undefined) query.set('points', String(opts.points));
   const qs = query.toString();
   const suffix = qs === '' ? '' : `?${qs}`;
   // Series ids contain ':' (e.g. SHILLER:CAPE) and must survive the path.

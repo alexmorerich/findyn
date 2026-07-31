@@ -33,6 +33,18 @@ export interface RangeSpec {
   log: boolean;
   /** True for the monthly Shiller tier, which is a different series entirely. */
   monthly: boolean;
+  /**
+   * True when the range outruns the publication series.
+   *
+   * `FRED:SP500` is licence-capped to a rolling ten years, so the engine's own
+   * `price_close` metric cannot reach past 2016 however much history is
+   * republished. Beyond that the chart reads the daily S&P record straight out
+   * of `macro_series` — same index, different vendor — and the provenance block
+   * says so. The filtered overlay is not drawn there, because the model only
+   * runs on the publication series and pretending otherwise would draw a line
+   * that was never computed.
+   */
+  deep: boolean;
   /** Shown in the provenance block, so the reader knows what they are seeing. */
   description: string;
 }
@@ -45,6 +57,7 @@ export const RANGES: readonly RangeSpec[] = [
     points: 400,
     log: false,
     monthly: false,
+    deep: false,
     description: 'daily closes, last twelve months',
   },
   {
@@ -54,6 +67,7 @@ export const RANGES: readonly RangeSpec[] = [
     points: 900,
     log: false,
     monthly: false,
+    deep: false,
     description: 'daily closes, last five years',
   },
   {
@@ -65,7 +79,8 @@ export const RANGES: readonly RangeSpec[] = [
     // but only just, and the 2008 drawdown reads as shallower than it was.
     log: true,
     monthly: false,
-    description: 'daily closes, last twenty years, log scale',
+    deep: true,
+    description: 'YAHOO:^GSPC daily closes, last twenty years, log scale',
   },
   {
     key: 'max',
@@ -74,7 +89,8 @@ export const RANGES: readonly RangeSpec[] = [
     points: 2500,
     log: true,
     monthly: false,
-    description: 'daily closes from 1927-12-30, log scale',
+    deep: true,
+    description: 'YAHOO:^GSPC daily closes from 1927-12-30, log scale',
   },
   {
     key: 'monthly',
@@ -83,6 +99,7 @@ export const RANGES: readonly RangeSpec[] = [
     points: 2200,
     log: true,
     monthly: true,
+    deep: false,
     description: 'Shiller month-end composite from 1871, log scale — monthly, not daily',
   },
 ] as const;
