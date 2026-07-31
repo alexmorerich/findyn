@@ -1,4 +1,8 @@
 import type { Env } from '../types';
+import { MIN_THRESHOLD, decimate } from '../lib/decimate';
+
+/** Above the 24,761 daily closes the full S&P record holds. */
+export const MAX_OBSERVATION_ROWS = 60000;
 
 export interface SeriesSummary {
   series_id: string;
@@ -85,12 +89,28 @@ export async function getSeriesMetadata(
     .first<SeriesMetadata>();
 }
 
+export interface ObservationResult {
+  observations: Observation[];
+  available: number;
+  truncated: boolean;
+  decimated: { from: number; to: number; method: 'lttb' } | null;
+}
+
+/**
+ * Raw observations for one series, oldest-first, optionally downsampled.
+ *
+ * `points` exists because the daily S&P record is 24,761 rows and the chart that
+ * wants "everything since 1927" is reading it straight out of `macro_series` —
+ * the engine's own chart metrics only reach as far as the *publication* series,
+ * which FRED licence-caps at ten years. Decimating here is the same contract as
+ * `/assets/:asset/history`: shape-preserving, and never silent about it.
+ */
 export async function getObservations(
   env: Env,
   seriesId: string,
-  opts: { from?: string; to?: string; limit?: number } = {},
-): Promise<Observation[]> {
-  const limit = Math.min(Math.max(opts.limit ?? 500, 1), 5000);
+  opts: { from?: string; to?: string; limit?: number; points?: number } = {},
+): Promise<ObservationResult> {
+  const limit = Math.min(Math.max(opts.limit ?? MAX_OBSERVATION_ROWS, 1), MAX_OBSERVATION_ROWS);
 
   const conditions = ['series_id = ?'];
   const bindings: (string | number)[] = [seriesId];
@@ -102,17 +122,40 @@ export async function getObservations(
     conditions.push('obs_date <= ?');
     bindings.push(opts.to);
   }
-  bindings.push(limit);
+  const counted = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM macro_series WHERE ${conditions.join(' AND ')}`,
+  )
+    .bind(...bindings)
+    .first<{ n: number }>();
+  const available = counted?.n ?? 0;
 
+  // Ascending: taking the newest N and reversing would drop the *oldest* rows
+  // of a wide window, which is exactly the truncation this has to make visible.
   const { results } = await env.DB.prepare(
     `SELECT obs_date, release_date, revision_date, value
        FROM macro_series
       WHERE ${conditions.join(' AND ')}
-      ORDER BY obs_date DESC, revision_date DESC
+      ORDER BY obs_date ASC, revision_date DESC
       LIMIT ?`,
   )
-    .bind(...bindings)
+    .bind(...bindings, limit)
     .all<Observation>();
 
-  return results ?? [];
+  const rows = results ?? [];
+  const target = opts.points;
+  if (target && target >= MIN_THRESHOLD && rows.length > target) {
+    const finite = rows.filter((r) => Number.isFinite(r.value));
+    const sampled = decimate(
+      finite.map((r) => ({ ...r, x: Date.parse(`${r.obs_date}T00:00:00Z`), y: r.value })),
+      target,
+    );
+    return {
+      observations: sampled.map(({ x: _x, y: _y, ...rest }) => rest),
+      available,
+      truncated: available > limit,
+      decimated: { from: finite.length, to: sampled.length, method: 'lttb' },
+    };
+  }
+
+  return { observations: rows, available, truncated: available > limit, decimated: null };
 }

@@ -40,6 +40,9 @@ VALID_PROVIDERS = frozenset(
         "bls",
         "bea",
         "stooq",
+        # Fallback only, and isolated behind one adapter so it stays deletable
+        # (FINDYN_V1_SPEC.md §5.1 source 7).
+        "yahoo",
         # Computed downstream from other configured series, never fetched.
         "derived",
         # Not an external source: another engine's published output, read back

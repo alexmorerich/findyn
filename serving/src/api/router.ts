@@ -17,6 +17,7 @@ import {
   listAssets,
   listMetrics,
 } from './assets';
+import { UnknownForceError, getForces, getRegimeHistory, getTwoLayerState } from './equity';
 import {
   ASSETS,
   DISCOUNT_HORIZONS,
@@ -92,13 +93,23 @@ api.get('/series/:id{.+}', async (c) => {
   if (!metadata) {
     return c.json({ error: 'not_found', message: `unknown series: ${seriesId}` }, 404);
   }
-  const observations = await getObservations(c.env, seriesId, {
+  const result = await getObservations(c.env, seriesId, {
     from: c.req.query('from'),
     to: c.req.query('to'),
     limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined,
+    points: c.req.query('points') ? Number(c.req.query('points')) : undefined,
   });
   return c.json(
-    envelope({ metadata, observations }, { as_of: observations[0]?.obs_date ?? null }),
+    envelope(
+      {
+        metadata,
+        observations: result.observations,
+        available: result.available,
+        truncated: result.truncated,
+        decimated: result.decimated,
+      },
+      { as_of: result.observations.at(-1)?.obs_date ?? null },
+    ),
   );
 });
 
@@ -203,29 +214,90 @@ api.get('/assets/:asset/history', async (c) => {
     );
   }
 
-  const points = await getHistory(c.env, asset, metric, {
+  const history = await getHistory(c.env, asset, metric, {
     from: c.req.query('from'),
     to: c.req.query('to'),
     limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined,
+    // `points` asks the server to downsample for rendering. Opt-in, because a
+    // consumer reading these series back as model input (P2's curve read-back)
+    // wants every row and would be quietly given a sketch otherwise.
+    points: c.req.query('points') ? Number(c.req.query('points')) : undefined,
   });
-  const newest = points.at(-1)?.as_of ?? null;
+  const newest = history.points.at(-1)?.as_of ?? null;
 
   return c.json(
     envelope(
-      { asset, metric, count: points.length, points },
+      {
+        asset,
+        metric,
+        count: history.points.length,
+        // Reported even when nothing was dropped: a client that has to infer
+        // whether it received the whole window will eventually infer wrong.
+        available: history.available,
+        truncated: history.truncated,
+        decimated: history.decimated,
+        points: history.points,
+      },
       { as_of: newest, stale: isAssetStale(newest) },
     ),
   );
 });
 
-// M2 — kinematic state K(t) + force state F(t) snapshot
-api.get('/state', (c) => notImplemented(c, 'M2', '§13 /state'));
+// M2 — kinematic state K(t) + force state F(t) snapshot.
+//
+// Live from P3-A. `regime` is an explicit null until the HMM lands in P3-B —
+// the endpoint reports which half of the two-layer state exists rather than
+// withholding the half that does.
+api.get('/state', async (c) => {
+  const state = await getTwoLayerState(c.env);
+  const asOf = state.kinematics.as_of ?? state.forces.as_of;
+  return c.json(
+    envelope(state, {
+      as_of: asOf,
+      model_version: state.kinematics.model_version,
+      stale: isAssetStale(asOf),
+    }),
+  );
+});
 
-// M3 — regime probability history
-api.get('/regime', (c) => notImplemented(c, 'M3', '§13 /regime'));
+// M3 — regime probability history. Live from P3-B.
+api.get('/regime', async (c) => {
+  const history = await getRegimeHistory(c.env, c.req.query('asset') ?? 'equity', {
+    from: c.req.query('from'),
+    to: c.req.query('to'),
+    points: c.req.query('points') ? Number(c.req.query('points')) : undefined,
+  });
+  const newest = history.points.at(-1)?.as_of ?? null;
+  return c.json(
+    envelope(history, {
+      as_of: newest,
+      model_version: history.model_version,
+      stale: isAssetStale(newest),
+    }),
+  );
+});
 
-// M2 — force score history with component breakdowns
-api.get('/forces', (c) => notImplemented(c, 'M2', '§13 /forces'));
+// M2 — force score history with component breakdowns. Live from P3-A; the
+// scores themselves have been published since P1, when Layer 0 shipped.
+api.get('/forces', async (c) => {
+  try {
+    const points = await getForces(c.env, {
+      from: c.req.query('from'),
+      to: c.req.query('to'),
+      force: c.req.query('force'),
+      limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined,
+    });
+    const newest = points.at(-1)?.as_of ?? null;
+    return c.json(
+      envelope({ count: points.length, forces: FORCES, points }, { as_of: newest, stale: isAssetStale(newest) }),
+    );
+  } catch (err) {
+    if (err instanceof UnknownForceError) {
+      return c.json({ error: 'bad_request', message: err.message }, 400);
+    }
+    throw err;
+  }
+});
 
 // M4 — RII + crash decomposition history
 api.get('/instability', (c) => notImplemented(c, 'M4', '§13 /instability'));

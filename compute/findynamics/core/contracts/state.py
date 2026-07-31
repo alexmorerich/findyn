@@ -185,6 +185,71 @@ class AssetState:
 
 
 @dataclass(frozen=True)
+class DerivedFeature:
+    """One per-date model input for the ``derived_features`` table.
+
+    Distinct from :class:`EngineOutput` by exactly one thing, and it is the thing
+    that matters: ``model_version`` is part of the key. ``engine_output`` is what
+    an engine publishes for people to look at, so the newest run owns each date.
+    A feature is what a *model was fitted on*, so a refit that changes the
+    transform must land beside the old features rather than on top of them —
+    otherwise every backtest of the previous model silently becomes a backtest of
+    a feature set that model never saw.
+    """
+
+    asset: str
+    feature: str
+    as_of: date
+    value: float
+    #: Carried on the row, not taken from the run envelope: it is part of this
+    #: table's key, and a run publishing two engines has two versions.
+    model_version: str
+
+    def __post_init__(self) -> None:
+        if self.asset not in ASSETS:
+            raise ContractError(f"DerivedFeature.asset {self.asset!r} is not one of {list(ASSETS)}")
+        if not self.feature:
+            raise ContractError("DerivedFeature.feature must be non-empty")
+        if not self.model_version:
+            raise ContractError("DerivedFeature.model_version must be non-empty")
+        _check_date(self.as_of, "DerivedFeature.as_of")
+        if isinstance(self.value, bool) or not isinstance(self.value, int | float):
+            raise ContractError(f"DerivedFeature.value: expected a number, got {self.value!r}")
+        if not math.isfinite(self.value):
+            raise ContractError(f"DerivedFeature.value must be finite, got {self.value!r}")
+
+
+@dataclass(frozen=True)
+class RegimeProbability:
+    """One regime's probability on one date, for the ``regime_state`` table.
+
+    Deliberately a *distribution* rather than a winning label: §12's output
+    contract shows the whole posterior, and the difference between a 0.95 bull
+    call and a 0.35 one is most of the information. The argmax lives on
+    :class:`AssetState`; this is what it was the argmax of.
+    """
+
+    asset: str
+    as_of: date
+    #: Engine-defined regime vocabulary — equity's is in engines/equity/domain.py.
+    regime: str
+    probability: float
+    model_version: str
+
+    def __post_init__(self) -> None:
+        if self.asset not in ASSETS:
+            raise ContractError(
+                f"RegimeProbability.asset {self.asset!r} is not one of {list(ASSETS)}"
+            )
+        if not self.regime:
+            raise ContractError("RegimeProbability.regime must be non-empty")
+        if not self.model_version:
+            raise ContractError("RegimeProbability.model_version must be non-empty")
+        _check_date(self.as_of, "RegimeProbability.as_of")
+        _check_range(self.probability, 0.0, 1.0, "RegimeProbability.probability")
+
+
+@dataclass(frozen=True)
 class EngineOutput:
     """One wide metric for the ``engine_output`` table (NS level/slope, carry, …).
 

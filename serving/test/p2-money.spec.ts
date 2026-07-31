@@ -203,7 +203,7 @@ describe('money reads need no new endpoint', () => {
 
   it('serves the wealth index oldest-first with its base date', async () => {
     await applyWriteBack(env, validatePayload(PAYLOAD));
-    const points = await getHistory(env, 'money', 'wealth_index');
+    const points = (await getHistory(env, 'money', 'wealth_index')).points;
 
     expect(points.map((p) => p.as_of)).toEqual(['2026-07-27', '2026-07-28']);
     // A wealth index without its base date is not interpretable.
@@ -212,14 +212,14 @@ describe('money reads need no new endpoint', () => {
 
   it('carries the liquidity label beside its code', async () => {
     await applyWriteBack(env, validatePayload(PAYLOAD));
-    const points = await getHistory(env, 'money', 'liquidity_code');
+    const points = (await getHistory(env, 'money', 'liquidity_code')).points;
     expect(points[0]?.meta).toEqual({ liquidity: 'tightening' });
     expect(points[0]?.value).toBe(MONEY_REGIMES.indexOf('tightening'));
   });
 
   it('records which curve each discount factor came from', async () => {
     await applyWriteBack(env, validatePayload(PAYLOAD));
-    const points = await getHistory(env, 'money', 'discount_10y');
+    const points = (await getHistory(env, 'money', 'discount_10y')).points;
     expect(points[0]?.meta).toEqual({ curve_source: 'ns' });
   });
 
@@ -290,7 +290,7 @@ describe('staleness is measured in market days, not ingestion hours', () => {
 describe('written_at is exposed as the row vintage', () => {
   it('history points carry the publication timestamp', async () => {
     await applyWriteBack(env, validatePayload(PAYLOAD));
-    const points = await getHistory(env, 'money', 'wealth_index');
+    const points = (await getHistory(env, 'money', 'wealth_index')).points;
 
     for (const point of points) {
       expect(point.written_at).toBeTruthy();
@@ -303,7 +303,7 @@ describe('written_at is exposed as the row vintage', () => {
     // a five-year window stamps every row with today, and a consumer standing in
     // the past must not be able to see any of them.
     await applyWriteBack(env, validatePayload(PAYLOAD));
-    const points = await getHistory(env, 'money', 'wealth_index');
+    const points = (await getHistory(env, 'money', 'wealth_index')).points;
 
     const early = points.find((p) => p.as_of === '2026-07-27');
     expect(early?.written_at! > early!.as_of).toBe(true);

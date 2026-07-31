@@ -40,7 +40,7 @@ def test_equity_price_covers_every_horizon_p3_needs():
     price = load_series_config().engine_series("equity")
     assert price["primary"].provider == "fred"
     assert price["regime_proxy"].id == "FRED:NASDAQ100"
-    assert price["backfill"].provider == "stooq"
+    assert price["backfill"].provider == "yahoo"
 
 
 def test_deep_history_reaches_1871():
@@ -55,21 +55,27 @@ def test_equity_series_ids_are_provider_native():
     adapter accepted — valid at load, dead at fetch."""
     price = load_series_config().engine_series("equity")
     assert price["primary"].id == "FRED:SP500"
-    assert price["backfill"].id == "STOOQ:^SPX"
+    assert price["backfill"].id == "YAHOO:^GSPC"
     assert price["deep_history"].id == "SHILLER:NOMINAL_PRICE"
 
 
 def test_only_engines_whose_phase_has_landed_are_enabled():
-    """An engine enabled before its models exist would publish nothing daily.
+    """An engine enabled before it can publish anything would be noise daily.
 
-    P1 shipped rates, P2 shipped money. Equity, gold and crypto are configured
-    but disabled, which is the correct state for an engine that does not exist —
-    and the ordering is ASSETS order, not config order, so a run is deterministic.
+    P1 shipped rates, P2 shipped money, P3-A shipped equity's feature path. Gold
+    and crypto are configured but disabled, which is the correct state for an
+    engine that does not exist — and the ordering is ASSETS order, not config
+    order, so a run is deterministic.
+
+    Equity is enabled while it still publishes no ``AssetState``: it publishes
+    real features on every run and declines the state (``StateUnavailable``)
+    until the regime model lands in P3-B. "Enabled" means "has something to say",
+    not "has everything to say".
     """
     config = load_series_config()
-    assert config.enabled_engine_names() == ("money", "rates")
+    assert config.enabled_engine_names() == ("money", "rates", "equity")
     assert set(config.engines) == {"money", "rates", "equity", "gold", "crypto"}
-    for unbuilt in ("equity", "gold", "crypto"):
+    for unbuilt in ("gold", "crypto"):
         assert not config.is_enabled(unbuilt)
 
 

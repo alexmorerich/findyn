@@ -164,6 +164,96 @@ def _differs(left: object, right: object, tolerance: float) -> bool:
     return left != right
 
 
+def feature_history(
+    engine: AssetEngine,
+    observations: pd.DataFrame,
+    cutoff: date,
+    *,
+    config: SeriesConfig | None = None,
+    with_factors: bool = False,
+) -> dict[tuple[date, str], float]:
+    """Every per-date feature the engine can compute at one cutoff.
+
+    Keyed by (observation date, feature name) so two runs can be compared row by
+    row. Factors are off by default because the feature path of an engine that
+    reads none of them is the common case and scoring them is the expensive part.
+    """
+    world = world_at(observations, cutoff, config=config, with_factors=with_factors)
+    return {(row.as_of, row.feature): row.value for row in engine.derived_features(world)}
+
+
+def assert_features_replay(
+    engine: AssetEngine,
+    observations: pd.DataFrame,
+    cutoffs: Sequence[date],
+    *,
+    config: SeriesConfig | None = None,
+    tolerance: float = 1e-9,
+    max_report: int = 20,
+) -> int:
+    """§14.1 rule 5 for the feature path. Returns the number of rows compared.
+
+    The check: a feature value for date *t* must be the same whether it was
+    computed on the run whose cutoff was *t* or recomputed later from a much
+    larger information set. If a transform secretly reaches forward, the two
+    disagree — and they disagree only on the dates near the earlier cutoff,
+    which is exactly the fingerprint this is looking for.
+
+    The newest cutoff plays the part of "the stored history", because in a test
+    there is no D1 to diff against; the comparison is otherwise the one the spec
+    describes.
+
+    **Fitted parameters must be frozen before calling this.** With a live refit,
+    every cutoff re-estimates the Kalman variances and re-searches ``d`` on its
+    own window, so the values legitimately differ between runs and the test would
+    be measuring the estimator's expanding window rather than the transform's
+    causality. Freezing them — which is also what production does between monthly
+    refits — holds the transform fixed so that any remaining difference is
+    lookahead and nothing else.
+    """
+    ordered = sorted(cutoffs)
+    if len(ordered) < 2:
+        raise ValueError("replaying a feature path needs at least two cutoffs to compare")
+
+    reference = feature_history(engine, observations, ordered[-1], config=config)
+
+    failures: list[str] = []
+    compared = 0
+    for cutoff in ordered[:-1]:
+        replayed = feature_history(engine, observations, cutoff, config=config)
+        if not replayed:
+            failures.append(f"{cutoff}: the engine produced no features at all")
+            continue
+        for key, value in replayed.items():
+            stored = reference.get(key)
+            if stored is None:
+                # The later run publishes a bounded window, so a date that has
+                # aged out of it is not a mismatch — it is simply not compared.
+                continue
+            compared += 1
+            if abs(value - stored) > tolerance:
+                failures.append(
+                    f"cutoff {cutoff}: {key[1]} on {key[0]} replayed={value!r} stored={stored!r}"
+                )
+
+    if failures:
+        shown = failures[:max_report]
+        hidden = len(failures) - max_report
+        more = "" if hidden <= 0 else f"\n  ... and {hidden} more"
+        raise AssertionError(
+            f"{len(failures)} feature value(s) differ between the run that computed "
+            "them and a later recomputation — this is what lookahead looks like:\n  "
+            + "\n  ".join(shown)
+            + more
+        )
+
+    if not compared:
+        raise AssertionError(
+            "no feature rows overlapped between the cutoffs; the replay compared nothing"
+        )
+    return compared
+
+
 def assert_replays(
     engine: AssetEngine,
     observations: pd.DataFrame,

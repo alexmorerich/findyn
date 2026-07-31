@@ -195,11 +195,11 @@ describe('asset reads', () => {
 
   it('returns history oldest-first, with meta parsed', async () => {
     await applyWriteBack(env, validatePayload(PAYLOAD));
-    const points = await getHistory(env, 'rates', 'ns_level');
+    const { points } = await getHistory(env, 'rates', 'ns_level');
     expect(points.map((p) => p.as_of)).toEqual(['2026-07-27', '2026-07-28']);
 
     const coded = await getHistory(env, 'rates', 'regime_code');
-    expect(coded[0]?.meta).toEqual({ regime: 're_steepening' });
+    expect(coded.points[0]?.meta).toEqual({ regime: 're_steepening' });
   });
 
   it('lists the metrics an engine has published', async () => {

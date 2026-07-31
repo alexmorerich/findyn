@@ -1,5 +1,6 @@
 import type { Env } from '../types';
 import { ASSETS } from '../domain';
+import { MIN_THRESHOLD, decimate } from '../lib/decimate';
 
 /**
  * Read side of the multi-asset tables (01-target-architecture.md §7).
@@ -203,13 +204,43 @@ export async function listMetrics(env: Env, asset: string): Promise<string[]> {
   return (results ?? []).map((r) => r.metric);
 }
 
+/**
+ * Hard ceiling on rows read for one series.
+ *
+ * Above the ~24,700 daily closes a full S&P history holds, so a Max-range
+ * request is expressible rather than silently clipped. It is still a ceiling:
+ * exceeding it sets `truncated`, and the caller is told rather than handed a
+ * prefix that looks like a short history.
+ */
+export const MAX_HISTORY_ROWS = 60000;
+
+/** Default target point count when a caller asks for decimation. */
+export const DEFAULT_CHART_POINTS = 2000;
+
+export interface HistoryResult {
+  points: HistoryPoint[];
+  /** Rows the window actually holds, before any decimation. */
+  available: number;
+  /**
+   * True when the window holds more than `MAX_HISTORY_ROWS` and the response is
+   * therefore a *prefix* of the answer rather than the answer.
+   *
+   * The one failure this whole shape exists to prevent: a clipped series and a
+   * genuinely short one look identical on a chart, and the reader concludes the
+   * market began in 2021.
+   */
+  truncated: boolean;
+  /** Present when the series was downsampled for rendering. */
+  decimated: { from: number; to: number; method: 'lttb' } | null;
+}
+
 export async function getHistory(
   env: Env,
   asset: string,
   metric: string,
-  opts: { from?: string; to?: string; limit?: number } = {},
-): Promise<HistoryPoint[]> {
-  const limit = Math.min(Math.max(opts.limit ?? 2000, 1), 10000);
+  opts: { from?: string; to?: string; limit?: number; points?: number } = {},
+): Promise<HistoryResult> {
+  const limit = Math.min(Math.max(opts.limit ?? MAX_HISTORY_ROWS, 1), MAX_HISTORY_ROWS);
 
   const conditions = ['asset = ?', 'metric = ?'];
   const bindings: (string | number)[] = [asset, metric];
@@ -221,25 +252,47 @@ export async function getHistory(
     conditions.push('as_of <= ?');
     bindings.push(opts.to);
   }
-  bindings.push(limit);
 
+  const counted = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM engine_output WHERE ${conditions.join(' AND ')}`,
+  )
+    .bind(...bindings)
+    .first<{ n: number }>();
+  const available = counted?.n ?? 0;
+
+  // Ascending in SQL now that the window is explicit: taking the newest N and
+  // reversing would have silently dropped the *oldest* rows of a wide range,
+  // which is precisely the truncation this endpoint has to make visible.
   const { results } = await env.DB.prepare(
     `SELECT as_of, value, meta, written_at FROM engine_output
       WHERE ${conditions.join(' AND ')}
-      ORDER BY as_of DESC
+      ORDER BY as_of ASC
       LIMIT ?`,
   )
-    .bind(...bindings)
+    .bind(...bindings, limit)
     .all<{ as_of: string; value: number; meta: string | null; written_at: string | null }>();
 
-  // Ascending on the way out: a chart wants time to move left to right, and the
-  // DESC + LIMIT above is only there to make "the most recent N" cheap.
-  return (results ?? [])
-    .map((r) => ({
-      as_of: r.as_of,
-      value: r.value,
-      meta: parseJson<unknown>(r.meta, null),
-      written_at: r.written_at ?? null,
-    }))
-    .reverse();
+  const rows: HistoryPoint[] = (results ?? []).map((r) => ({
+    as_of: r.as_of,
+    value: r.value,
+    meta: parseJson<unknown>(r.meta, null),
+    written_at: r.written_at ?? null,
+  }));
+
+  const target = opts.points;
+  if (target && target >= MIN_THRESHOLD && rows.length > target) {
+    const finite = rows.filter((r) => Number.isFinite(r.value));
+    const sampled = decimate(
+      finite.map((r) => ({ ...r, x: Date.parse(`${r.as_of}T00:00:00Z`), y: r.value })),
+      target,
+    );
+    return {
+      points: sampled.map(({ x: _x, y: _y, ...rest }) => rest),
+      available,
+      truncated: available > limit,
+      decimated: { from: finite.length, to: sampled.length, method: 'lttb' },
+    };
+  }
+
+  return { points: rows, available, truncated: available > limit, decimated: null };
 }

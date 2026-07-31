@@ -185,10 +185,18 @@ engines:
       # (verified: 11,994 obs), so 1987, 2000, 2008 and 2020 are all in-sample —
       # which the 10y SP500 window alone cannot offer.
       regime_proxy: {id: "FRED:NASDAQ100", provider: fred, frequency: daily, publication_lag_days: 1}
-      # Bulk daily S&P history, free and keyless — but the endpoint bot-filters
-      # some egresses (see providers/stooq.py); where it answers it is the daily
-      # deep history, where it does not the roles above carry the engine.
-      backfill:     {id: "STOOQ:^SPX", provider: stooq, frequency: daily, publication_lag_days: 0}
+      # Daily S&P history back to 1927 — the same index as `primary`, so a model
+      # fitted here is not fitted on a proxy (engines/equity/prices.py treats
+      # this role as same-index for exactly that reason).
+      #
+      # Yahoo rather than Stooq: Stooq is the natural choice and was configured
+      # here first, but it fronts its CSV with a JavaScript proof-of-work
+      # challenge that blocks a developer network and GitHub's runners alike,
+      # and its per-IP daily cap denies the browser download too. Yahoo is a
+      # fallback by the spec's reckoning (§5.1 source 7) and unversioned, so
+      # treat a schema change as expected; absent it, `regime_proxy` carries
+      # calibration and the engine says so rather than implying the S&P.
+      backfill:     {id: "YAHOO:^GSPC", provider: yahoo, frequency: daily, publication_lag_days: 0}
       # Deep monthly history, 1871+. Nominal, matching the daily closes above;
       # SHILLER:REAL_PRICE exists for consumers that want the deflated series.
       deep_history: {id: "SHILLER:NOMINAL_PRICE", provider: shiller, frequency: monthly, publication_lag_days: 30}
