@@ -132,7 +132,7 @@ def test_the_tag_names_the_series_the_parameters_came_from(config):
     real = resolve(counts(**{PRIMARY: ENOUGH, BACKFILL: ENOUGH}), config)
 
     assert proxy.tag == "cal.fred_nasdaq100"
-    assert real.tag == "cal.stooq_spx"
+    assert real.tag == "cal.yahoo_gspc"
     # Different tags mean different model versions, which means different
     # asset_state rows — the two fits cannot be confused for one another.
     assert proxy.tag != real.tag

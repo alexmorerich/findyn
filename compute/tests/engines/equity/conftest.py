@@ -23,7 +23,7 @@ from tests.conftest import FIXTURE_DIR
 #: Role -> series id, matching config/series.yaml engines.equity.series.
 PRIMARY = "FRED:SP500"
 REGIME_PROXY = "FRED:NASDAQ100"
-BACKFILL = "STOOQ:^SPX"
+BACKFILL = "YAHOO:^GSPC"
 DEEP_HISTORY = "SHILLER:NOMINAL_PRICE"
 
 #: The snapshot's newest observation. Fixed rather than "today" so the suite does
