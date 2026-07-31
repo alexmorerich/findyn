@@ -4,7 +4,7 @@ import type { Env } from '../types';
 // `isStale` is not imported here any more: it measures hours since ingestion,
 // which is the right question for /health (where it still lives) and the wrong
 // one for a market date. The asset endpoints use isAssetStale instead.
-import { envelope, notImplemented } from '../lib/responses';
+import { envelope } from '../lib/responses';
 import { getHealth } from './health';
 import { getObservations, getSeriesMetadata, listSeries } from './series';
 import { InvalidDateError, pitSnapshot } from './pit';
@@ -17,7 +17,14 @@ import {
   listAssets,
   listMetrics,
 } from './assets';
-import { UnknownForceError, getForces, getRegimeHistory, getTwoLayerState } from './equity';
+import {
+  UnknownForceError,
+  getForces,
+  getForecast,
+  getInstability,
+  getRegimeHistory,
+  getTwoLayerState,
+} from './equity';
 import {
   ASSETS,
   DISCOUNT_HORIZONS,
@@ -81,7 +88,8 @@ api.get('/health', async (c) => {
 api.get('/series', async (c) => {
   const series = await listSeries(c.env);
   const newest = series.reduce<string | null>(
-    (max, s) => (s.latest_obs_date && (max === null || s.latest_obs_date > max) ? s.latest_obs_date : max),
+    (max, s) =>
+      s.latest_obs_date && (max === null || s.latest_obs_date > max) ? s.latest_obs_date : max,
     null,
   );
   return c.json(envelope({ count: series.length, series }, { as_of: newest }));
@@ -289,7 +297,10 @@ api.get('/forces', async (c) => {
     });
     const newest = points.at(-1)?.as_of ?? null;
     return c.json(
-      envelope({ count: points.length, forces: FORCES, points }, { as_of: newest, stale: isAssetStale(newest) }),
+      envelope(
+        { count: points.length, forces: FORCES, points },
+        { as_of: newest, stale: isAssetStale(newest) },
+      ),
     );
   } catch (err) {
     if (err instanceof UnknownForceError) {
@@ -299,11 +310,68 @@ api.get('/forces', async (c) => {
   }
 });
 
-// M4 — RII + crash decomposition history
-api.get('/instability', (c) => notImplemented(c, 'M4', '§13 /instability'));
+// M4 — RII + crash decomposition history. Live from P3-C.
+api.get('/instability', async (c) => {
+  const history = await getInstability(c.env, c.req.query('asset') ?? 'equity', {
+    from: c.req.query('from'),
+    to: c.req.query('to'),
+    points: c.req.query('points') ? Number(c.req.query('points')) : undefined,
+  });
+  const newest = history.points.at(-1)?.as_of ?? null;
+  return c.json(envelope(history, { as_of: newest, stale: isAssetStale(newest) }));
+});
 
-// M4 — quantile forecast distributions per horizon
-api.get('/forecast', (c) => notImplemented(c, 'M4', '§13 /forecast'));
+// M4 — quantile forecast distributions per horizon. Live from P3-C.
+api.get('/forecast', async (c) => {
+  const horizon = c.req.query('horizon');
+  if (horizon && !(HORIZONS as readonly string[]).includes(horizon)) {
+    return c.json(
+      {
+        error: 'bad_request',
+        message: `unknown horizon ${horizon}; expected one of ${HORIZONS.join('|')}`,
+      },
+      400,
+    );
+  }
+  const forecast = await getForecast(c.env, c.req.query('asset') ?? 'equity', horizon);
+  return c.json(
+    envelope(forecast, {
+      as_of: forecast.as_of,
+      model_version: forecast.model_version,
+      stale: isAssetStale(forecast.as_of),
+    }),
+  );
+});
 
-// M4 — Monte Carlo summary statistics
-api.get('/simulate', (c) => notImplemented(c, 'M4', '§13 /simulate'));
+// M4 — Monte Carlo summary statistics.
+//
+// The path bundles themselves are not served: §11 puts them in R2 for offline
+// analysis, and a public endpoint returning 10,000 paths would be a denial of
+// service with extra steps. What a caller wants — the distribution — is
+// /forecast, and the run's parameters are in the AssetState's components.
+api.get('/simulate', async (c) => {
+  const forecast = await getForecast(c.env, c.req.query('asset') ?? 'equity');
+  const state = await getAssetState(c.env, c.req.query('asset') ?? 'equity');
+  const components = state?.components ?? {};
+  return c.json(
+    envelope(
+      {
+        asset: forecast.asset,
+        as_of: forecast.as_of,
+        model_version: forecast.model_version,
+        horizons: forecast.horizons.map((band) => band.horizon),
+        summary: Object.fromEntries(
+          Object.entries(components).filter(([key]) => key.startsWith('mc_')),
+        ),
+        note:
+          'Quantile bands are served by /forecast. Full path bundles are archived ' +
+          'to R2 rather than served: 10,000 paths per horizon is not a payload.',
+      },
+      {
+        as_of: forecast.as_of,
+        model_version: forecast.model_version,
+        stale: isAssetStale(forecast.as_of),
+      },
+    ),
+  );
+});

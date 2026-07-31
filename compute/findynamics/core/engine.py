@@ -16,6 +16,7 @@ from findynamics.core.contracts.state import (
     AssetState,
     DerivedFeature,
     EngineOutput,
+    ForecastQuantile,
     RegimeProbability,
     WorldState,
 )
@@ -87,6 +88,15 @@ class AssetEngine(ABC):
 
         Separate from :meth:`outputs` because these rows are versioned by model:
         see :class:`~findynamics.core.contracts.state.DerivedFeature`.
+        """
+        return ()
+
+    def forecasts(self, world: WorldState) -> tuple[ForecastQuantile, ...]:
+        """Optional quantile forecasts for the ``forecast_distribution`` table.
+
+        Its own hook rather than a metric on :meth:`outputs` because the key is
+        (as_of, horizon, quantile) and because the row shape has no place to put
+        a point forecast — which is the §0 non-goal made structural.
         """
         return ()
 

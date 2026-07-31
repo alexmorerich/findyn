@@ -1268,3 +1268,106 @@ a.enginecard__title {
   color: var(--fg-muted);
   margin-top: 0.2rem;
 }
+
+/* --------------------------------------------------------------- P3-C ---
+ * Crash decomposition bars, forecast bands, and the educational strip.
+ *
+ * The bars are a list rather than a chart on purpose: three probabilities on
+ * one axis is a table with extra steps, and §4's point is that the reader
+ * should compare them to each other, not to a shared scale.
+ */
+.dial__value--bad { stroke: var(--bad); }
+.dial__value--idle { stroke: var(--fg-faint); }
+
+.barlist {
+  display: flex;
+  flex-direction: column;
+  gap: 1.05rem;
+}
+.barrow__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+.barrow__label {
+  font-family: var(--mono);
+  font-size: 0.86rem;
+  color: var(--fg);
+}
+.barrow__value {
+  font-size: 0.95rem;
+  color: var(--fg);
+}
+.bar {
+  margin-top: 0.4rem;
+  height: 0.6rem;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.bar__fill {
+  height: 100%;
+  border-radius: 999px;
+}
+.bar__fill--ok { background: var(--ok); }
+.bar__fill--warn { background: var(--warn); }
+.bar__fill--bad { background: var(--bad); }
+.barrow__detail {
+  margin: 0.45rem 0 0;
+  font-size: 0.83rem;
+  line-height: 1.5;
+  color: var(--fg-muted);
+  max-width: 60ch;
+}
+
+.fan__band {
+  fill: var(--accent);
+  stroke: none;
+}
+.fan__point {
+  fill: var(--accent);
+}
+
+.bandrow {
+  border-top: 1px solid var(--border);
+  padding: 0.7rem 0;
+}
+.bandrow__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.deflist--inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-top: 0.35rem;
+}
+.deflist--inline .defrow {
+  display: flex;
+  gap: 0.35rem;
+  align-items: baseline;
+}
+.deflist--inline dt {
+  color: var(--fg-faint);
+  font-size: 0.76rem;
+}
+
+/* Educational horizons live below a rule and in muted type. §10 excludes them
+ * from accuracy evaluation; drawn like the others they would read as forecasts
+ * of the same kind, which is the one thing they must not do. */
+.educational {
+  margin-top: 1.4rem;
+  padding-top: 1rem;
+  border-top: 2px dashed var(--border-strong);
+}
+.educational__title {
+  font-size: 0.95rem;
+  color: var(--fg-muted);
+  margin: 0 0 0.4rem;
+}
+.bandrow--educational {
+  opacity: 0.72;
+}

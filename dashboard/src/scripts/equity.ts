@@ -26,6 +26,8 @@ import {
   getAssetHistory,
   getAssetState,
   getForces,
+  getForecast,
+  getInstability,
   getRegimeHistory,
   getSeries,
   getTwoLayerState,
@@ -33,7 +35,9 @@ import {
   type AssetHistory,
   type AssetState,
   type ForceHistory,
+  type ForecastResponse,
   type HistoryPoint,
+  type InstabilityHistory,
   type RegimeHistory,
   type SeriesDetail,
   type TwoLayerState,
@@ -64,6 +68,29 @@ const JERK_EXTREME = 3.0;
 /** §9 L2 vocabulary, most to least risk-on — the stacking order. */
 const REGIMES = ['bull_expansion', 'normal_expansion', 'late_cycle', 'bear', 'crisis'] as const;
 
+/** §3.2 reading thresholds for the RII. Percentiles, so these are percentiles. */
+const RII_ELEVATED = 60;
+const RII_HIGH = 80;
+/** The sparkline window, fixed independently of the page range — see below. */
+const RII_SPARKLINE_DAYS = 90;
+
+/** §11 horizons, mirroring core/contracts/vocab.py. */
+const HORIZON_YEARS: Record<string, number> = {
+  tactical: 0.5,
+  strategic: 2,
+  generational: 12,
+  educational_30y: 30,
+  educational_50y: 50,
+};
+
+const HORIZON_LABELS: Record<string, string> = {
+  tactical: '6 months',
+  strategic: '2 years',
+  generational: '12 years',
+  educational_30y: '30 years',
+  educational_50y: '50 years',
+};
+
 const REGIME_TONE: Record<string, Tone> = {
   bull_expansion: 'ok',
   normal_expansion: 'ok',
@@ -76,6 +103,9 @@ const host = (id: string) => document.querySelector(`#equity-${id}`);
 
 const hosts = {
   range: host('range'),
+  instability: host('instability'),
+  crash: host('crash'),
+  forecast: host('forecast'),
   state: host('state'),
   regime: host('regime'),
   transitions: host('transitions'),
@@ -666,6 +696,403 @@ function renderTransitions(state: ApiResult<AssetState>): void {
   );
 }
 
+/**
+ * §3.2 — the RII, as a gauge with its own recent history.
+ *
+ * The sparkline is fixed at 90 days regardless of the page range. The index is a
+ * percentile against expanding history, so "68" only means something next to
+ * what it was last quarter; stretching it across a century turns the reading
+ * that matters — the last few weeks — into two pixels.
+ */
+function renderInstability(
+  instability: ApiResult<InstabilityHistory>,
+  state: ApiResult<AssetState>,
+): void {
+  if (!hosts.instability) return;
+  if (!instability.ok) {
+    replace(hosts.instability, failureBlock(instability, 'Regime instability'));
+    return;
+  }
+
+  const points = instability.envelope.data.points;
+  const withRii = points.filter((p) => p.rii !== null);
+  const latest = withRii.at(-1);
+
+  if (!latest || latest.rii === null) {
+    replace(
+      hosts.instability,
+      emptyBlock(
+        'an instability index',
+        'The engine publishes one once the regime model has been fitted and the slowest RII component has filled its window.',
+      ),
+    );
+    return;
+  }
+
+  const recent = withRii.slice(-RII_SPARKLINE_DAYS);
+  const value = latest.rii;
+  const tone: Tone = value >= RII_HIGH ? 'bad' : value >= RII_ELEVATED ? 'warn' : 'ok';
+  const previous = recent.at(0)?.rii ?? value;
+  const move = value - previous;
+
+  const components = state.ok ? (state.envelope.data.components ?? {}) : {};
+  const parts = Object.entries(components)
+    .filter(([key]) => key.startsWith('rii_') && !key.endsWith('_weight'))
+    .sort((a, b) => b[1] - a[1]);
+
+  replace(
+    hosts.instability,
+    el(
+      'div',
+      { class: 'dialrow' },
+      gauge(value, tone),
+      tile(
+        'Over 90 days',
+        `${move >= 0 ? '+' : ''}${formatValue(move)}`,
+        move > 0 ? 'warn' : 'ok',
+        `${formatValue(previous)} on ${formatDate(recent.at(0)?.as_of ?? latest.as_of)}, ${formatValue(value)} now.`,
+      ),
+      tile(
+        'Components',
+        String(parts.length),
+        parts.length >= 5 ? 'ok' : 'warn',
+        parts.length >= 5
+          ? 'Missing components are dropped and the weights renormalized, never scored zero.'
+          : 'Fewer than the seven §3.2 names — an absent input is reported, not treated as calm.',
+      ),
+    ),
+    recent.length > 2
+      ? lineChart(
+          [
+            {
+              points: recent.map((p) => ({ as_of: p.as_of, value: p.rii as number, meta: null })),
+              className: 'line line--primary',
+            },
+          ],
+          {
+            label: 'Regime instability index over the last 90 published days',
+            caption: `RII, last ${recent.length} published days · 0–100`,
+            bands: [RII_ELEVATED, RII_HIGH],
+          },
+        )
+      : null,
+    parts.length
+      ? el(
+          'details',
+          { class: 'explain' },
+          el('summary', {}, 'What the index is made of (each 0–100 on its own axis)'),
+          el(
+            'dl',
+            { class: 'deflist' },
+            ...parts.map(([key, componentValue]) =>
+              el(
+                'div',
+                { class: 'defrow' },
+                el('dt', { class: 'mono' }, key.replace('rii_', '')),
+                el('dd', { class: 'mono' }, formatValue(componentValue)),
+              ),
+            ),
+          ),
+        )
+      : null,
+    stateBlock({
+      tone: 'info',
+      title: 'This replaces the fourth derivative, deliberately',
+      detail:
+        'Snap — d⁴price/dt⁴ — is not published. Each differentiation amplifies noise, and a fourth derivative of a daily index is essentially all microstructure. The question "how close is this to a state transition" is answered instead by seven things that can actually be measured, of which the model\u2019s own uncertainty is two.',
+    }),
+  );
+}
+
+/** The RII as a half-circle gauge. */
+function gauge(value: number, tone: Tone): HTMLElement {
+  const size = 120;
+  const radius = 46;
+  const circumference = 2 * Math.PI * radius;
+  const fraction = Math.min(Math.max(value / 100, 0), 1);
+
+  const svg = svgEl('svg', {
+    class: 'dial',
+    viewBox: `0 0 ${size} ${size}`,
+    role: 'img',
+    'aria-label': `Regime instability index ${Math.round(value)} of 100`,
+  });
+  svg.appendChild(svgEl('circle', { class: 'dial__track', cx: size / 2, cy: size / 2, r: radius }));
+  svg.appendChild(
+    svgEl('circle', {
+      class: `dial__value dial__value--${tone}`,
+      cx: size / 2,
+      cy: size / 2,
+      r: radius,
+      'stroke-dasharray': `${(circumference * fraction).toFixed(2)} ${circumference.toFixed(2)}`,
+      transform: `rotate(-90 ${size / 2} ${size / 2})`,
+    }),
+  );
+  svg.appendChild(
+    svgEl(
+      'text',
+      { class: 'dial__label', x: size / 2, y: size / 2 + 6, 'text-anchor': 'middle' },
+      String(Math.round(value)),
+    ),
+  );
+
+  return el(
+    'div',
+    { class: 'dialcard' },
+    svg,
+    el('div', { class: 'dialcard__title' }, 'RII'),
+    el('div', { class: 'dialcard__detail' }, 'percentile against expanding history'),
+  );
+}
+
+/**
+ * §4 — crash risk as **three bars**, never one number.
+ *
+ * The composite is a product, so a single figure cannot distinguish "the regime
+ * is about to turn but the system is robust" from "the system is fragile but
+ * the regime is stable". Those call for opposite responses. The product is
+ * shown, small, underneath — it is a summary of the three, not a substitute.
+ */
+function renderCrash(state: ApiResult<AssetState>): void {
+  if (!hosts.crash) return;
+  if (!state.ok) {
+    replace(hosts.crash, failureBlock(state, 'Crash decomposition'));
+    return;
+  }
+
+  const data = state.envelope.data;
+  const components = data.components ?? {};
+  const signal = (name: string) => data.signals.find((s) => s.name === name)?.value;
+
+  const transitionKey = Object.keys(components).find((k) => /^p_transition_\d+m$/.test(k));
+  const transition = signal('p_transition') ?? (transitionKey ? components[transitionKey] : undefined);
+  const shock = signal('p_shock') ?? components.p_shock;
+  const transmission = signal('p_transmission') ?? components.p_transmission;
+  const composite = signal('crash_risk') ?? components.crash_risk;
+
+  const factors: Array<[string, number | undefined, string]> = [
+    [
+      'P(transition)',
+      transition,
+      'Probability the regime *enters* bear or crisis over the horizon, propagated from today’s posterior with the adverse states made absorbing. Derived from the posterior and the transition matrix, not from the classifier.',
+    ],
+    [
+      'P(shock)',
+      shock,
+      'Probability a drawdown past the severity threshold begins, from a generalized-Pareto fit to declustered historical drawdown episodes — one observation per episode, not per month underwater.',
+    ],
+    [
+      'P(transmission)',
+      transmission,
+      'Whether a shock would propagate or be absorbed: credit spread level and velocity, financial conditions, and the curve. Floored, because a benign reading means a shock transmits less, not that it fails to transmit.',
+    ],
+  ];
+
+  const available = factors.filter(([, v]) => v !== undefined && Number.isFinite(v));
+
+  replace(
+    hosts.crash,
+    available.length === 3
+      ? el(
+          'div',
+          { class: 'barlist' },
+          ...available.map(([label, v, detail]) => factorBar(label, v as number, detail)),
+        )
+      : emptyBlock(
+          'a crash decomposition',
+          'All three factors are published together or not at all — a composite without its parts is exactly the number §4 forbids.',
+        ),
+    composite !== undefined && available.length === 3
+      ? el(
+          'p',
+          { class: 'enginecard__detail' },
+          `Composite: ${formatValue(composite)} / 100 — the product of the three above, published beside them and never instead of them.`,
+        )
+      : null,
+    stateBlock({
+      tone: 'info',
+      title: 'Three factors, because they call for different responses',
+      detail:
+        'A high P(transition) with low fragility is a market that may turn without breaking. Low P(transition) with high fragility is a market that is fine until it is not. Multiplying them into one number erases the distinction that matters.',
+    }),
+  );
+}
+
+function factorBar(label: string, value: number, detail: string): HTMLElement {
+  const pct = Math.min(Math.max(value, 0), 1) * 100;
+  const tone: Tone = pct >= 60 ? 'bad' : pct >= 30 ? 'warn' : 'ok';
+  return el(
+    'div',
+    { class: 'barrow' },
+    el(
+      'div',
+      { class: 'barrow__head' },
+      el('span', { class: 'barrow__label' }, label),
+      el('span', { class: 'barrow__value mono' }, `${pct.toFixed(1)}%`),
+    ),
+    el(
+      'div',
+      { class: 'bar', role: 'img', 'aria-label': `${label} ${pct.toFixed(1)} percent` },
+      el('div', { class: `bar__fill bar__fill--${tone}`, style: `width:${pct.toFixed(2)}%` }),
+    ),
+    el('p', { class: 'barrow__detail' }, detail),
+  );
+}
+
+/**
+ * §11 — the Monte Carlo distribution as a fan, with the educational horizons
+ * held apart.
+ *
+ * Thirty- and fifty-year projections are in the spec as *illustrations of
+ * compounding*, and §10 excludes them from accuracy evaluation entirely. Drawn
+ * on the same axis as the six-month band they would read as forecasts of the
+ * same kind, so they get their own strip below the rule, greyed, and labelled.
+ */
+function renderForecast(forecast: ApiResult<ForecastResponse>): void {
+  if (!hosts.forecast) return;
+  if (!forecast.ok) {
+    replace(hosts.forecast, failureBlock(forecast, 'Forecast distribution'));
+    return;
+  }
+
+  const bands = forecast.envelope.data.horizons;
+  if (!bands.length) {
+    replace(
+      hosts.forecast,
+      emptyBlock(
+        'a forecast distribution',
+        'Published once the regime model has been fitted — the simulation is conditioned on the posterior.',
+      ),
+    );
+    return;
+  }
+
+  const real = bands.filter((b) => !b.educational_only);
+  const educational = bands.filter((b) => b.educational_only);
+  const order = (b: ForecastResponse['horizons'][number]) => HORIZON_YEARS[b.horizon] ?? 0;
+  real.sort((a, b) => order(a) - order(b));
+  educational.sort((a, b) => order(a) - order(b));
+
+  replace(
+    hosts.forecast,
+    real.length ? fanChart(real, 'Forecast horizons') : null,
+    ...real.map(bandRow),
+    educational.length
+      ? el(
+          'div',
+          { class: 'educational' },
+          el('h3', { class: 'educational__title' }, 'Educational horizons — not forecasts'),
+          el(
+            'p',
+            { class: 'prose' },
+            'Thirty and fifty years out, the distribution is an illustration of what compounding and its dispersion look like, not a claim about 2076. These are excluded from accuracy evaluation by §10 and are drawn apart from the horizons above for that reason.',
+          ),
+          ...educational.map(bandRow),
+        )
+      : null,
+    stateBlock({
+      tone: 'info',
+      title: 'Quantiles, never a target',
+      detail:
+        'There is no “S&P at X” anywhere in this system, by construction: the table these come from has no column for a point estimate. Each band is the distribution of terminal levels across at least ten thousand simulated paths, conditioned on today’s regime posterior and carrying the same tail model the crash decomposition uses.',
+    }),
+  );
+}
+
+function bandRow(band: ForecastResponse['horizons'][number]): HTMLElement {
+  const level = (q: string) => {
+    const value = band.quantiles[q];
+    return value === undefined ? '—' : formatCount(Math.round(Math.exp(value)));
+  };
+  return el(
+    'div',
+    { class: `bandrow${band.educational_only ? ' bandrow--educational' : ''}` },
+    el(
+      'div',
+      { class: 'bandrow__head' },
+      el('span', { class: 'barrow__label' }, HORIZON_LABELS[band.horizon] ?? band.horizon),
+      band.educational_only ? badge('educational', 'idle') : null,
+    ),
+    el(
+      'dl',
+      { class: 'deflist deflist--inline' },
+      ...['0.05', '0.25', '0.5', '0.75', '0.95'].map((q) =>
+        el(
+          'div',
+          { class: 'defrow' },
+          el('dt', { class: 'mono' }, `p${Math.round(Number(q) * 100)}`),
+          el('dd', { class: 'mono' }, level(q)),
+        ),
+      ),
+    ),
+  );
+}
+
+/** Quantile bands against horizon, as nested ribbons around the median. */
+function fanChart(bands: ForecastResponse['horizons'], label: string): SVGSVGElement {
+  const svg = svgEl('svg', {
+    class: 'chart',
+    viewBox: `0 0 ${W} ${H}`,
+    role: 'img',
+    preserveAspectRatio: 'xMidYMid meet',
+    'aria-label': label,
+  });
+
+  const years = bands.map((b) => HORIZON_YEARS[b.horizon] ?? 0);
+  const all = bands.flatMap((b) => Object.values(b.quantiles));
+  const minY = Math.min(...all);
+  const maxY = Math.max(...all);
+  const maxX = Math.max(...years, 1);
+
+  const x = (year: number) => PAD.left + (year / maxX) * (W - PAD.left - PAD.right);
+  const y = (value: number) =>
+    H - PAD.bottom - ((value - minY) / (maxY - minY || 1)) * (H - PAD.top - PAD.bottom);
+
+  // Widest band first, so the narrower ones layer over it.
+  for (const [lo, hi, opacity] of [
+    ['0.05', '0.95', 0.14],
+    ['0.25', '0.75', 0.24],
+  ] as const) {
+    const upper = bands.map((b, i) => `${x(years[i]!)},${y(b.quantiles[hi] ?? 0)}`);
+    const lower = bands
+      .map((b, i) => `${x(years[i]!)},${y(b.quantiles[lo] ?? 0)}`)
+      .reverse();
+    svg.appendChild(
+      svgEl('polygon', {
+        class: 'fan__band',
+        points: [...upper, ...lower].join(' '),
+        'fill-opacity': String(opacity),
+      }),
+    );
+  }
+
+  svg.appendChild(
+    svgEl('polyline', {
+      class: 'line line--primary',
+      points: bands.map((b, i) => `${x(years[i]!)},${y(b.quantiles['0.5'] ?? 0)}`).join(' '),
+    }),
+  );
+
+  bands.forEach((band, i) => {
+    const px = x(years[i]!);
+    svg.appendChild(
+      svgEl('circle', { class: 'fan__point', cx: px, cy: y(band.quantiles['0.5'] ?? 0), r: 3 }),
+    );
+    svg.appendChild(
+      svgEl(
+        'text',
+        { class: 'chart__tick', x: px, y: H - 12, 'text-anchor': 'middle' },
+        HORIZON_LABELS[band.horizon] ?? band.horizon,
+      ),
+    );
+  });
+
+  svg.appendChild(
+    svgEl('text', { x: PAD.left, y: 12 }, 'log index level — median, 50% and 90% bands'),
+  );
+  return svg;
+}
+
 function renderPrice(
   close: ApiResult<AssetHistory>,
   filtered: ApiResult<AssetHistory>,
@@ -994,11 +1421,28 @@ async function load(range: RangeSpec): Promise<void> {
   const history = (metric: string) =>
     getAssetHistory(ASSET, metric, { from, points: range.points });
 
-  const [state, twoLayer, regime, close, filtered, velocity, acceleration, jerk, forces, deep] =
-    await Promise.all([
+  const [
+    state,
+    twoLayer,
+    regime,
+    instability,
+    forecast,
+    close,
+    filtered,
+    velocity,
+    acceleration,
+    jerk,
+    forces,
+    deep,
+  ] = await Promise.all([
       getAssetState(ASSET),
       getTwoLayerState(),
       getRegimeHistory({ asset: ASSET, from, points: Math.min(range.points, 1200) }),
+      // Fixed window, not the page range: the RII sparkline is a 90-day read and
+      // the crash factors are a snapshot. Neither gets more meaningful with a
+      // century of context, and the request would cost the reader a second or two.
+      getInstability({ asset: ASSET, points: 400 }),
+      getForecast({ asset: ASSET }),
       range.deep || range.monthly ? Promise.resolve(null) : history('price_close'),
       range.deep || range.monthly ? Promise.resolve(null) : history('price_filtered'),
       range.monthly ? Promise.resolve(null) : history('velocity'),
@@ -1015,6 +1459,9 @@ async function load(range: RangeSpec): Promise<void> {
   const snapshot = renderState(twoLayer);
   renderRegime(regime, state);
   renderTransitions(state);
+  renderInstability(instability, state);
+  renderCrash(state);
+  renderForecast(forecast);
   renderPrice(close ?? regimePlaceholder(), filtered ?? regimePlaceholder(), deep, range);
   renderKinematics(velocity ?? regimePlaceholder(), acceleration ?? regimePlaceholder(), range);
   renderJerk(jerk ?? regimePlaceholder(), range);

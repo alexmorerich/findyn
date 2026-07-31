@@ -430,6 +430,66 @@ export function getRegimeHistory(
 }
 
 // ---------------------------------------------------------------------------
+// Instability and forecasts (§3.2, §4, §11) — FinEquity, P3-C
+// ---------------------------------------------------------------------------
+
+export interface InstabilityPoint {
+  as_of: string;
+  rii: number | null;
+  p_transition: number | null;
+  p_shock: number | null;
+  p_transmission: number | null;
+  crash_risk: number | null;
+}
+
+export interface InstabilityHistory {
+  asset: string;
+  count: number;
+  available: number;
+  decimated: { from: number; to: number; method: string } | null;
+  points: InstabilityPoint[];
+}
+
+/** RII and the crash decomposition per date. All three factors, always. */
+export function getInstability(
+  opts: { asset?: string; from?: string; to?: string; points?: number } = {},
+): Promise<ApiResult<InstabilityHistory>> {
+  const query = new URLSearchParams();
+  if (opts.asset) query.set('asset', opts.asset);
+  if (opts.from) query.set('from', opts.from);
+  if (opts.to) query.set('to', opts.to);
+  if (opts.points !== undefined) query.set('points', String(opts.points));
+  const qs = query.toString();
+  return apiGet<InstabilityHistory>(`/instability${qs === '' ? '' : `?${qs}`}`);
+}
+
+export interface ForecastBand {
+  horizon: string;
+  /** §10 excludes these from accuracy evaluation. Never plot them as forecasts. */
+  educational_only: boolean;
+  /** Quantile (as a string key) -> projected log index level. */
+  quantiles: Record<string, number>;
+}
+
+export interface ForecastResponse {
+  asset: string;
+  as_of: string | null;
+  model_version: string | null;
+  horizons: ForecastBand[];
+}
+
+/** Monte Carlo quantile bands per horizon. */
+export function getForecast(
+  opts: { asset?: string; horizon?: string } = {},
+): Promise<ApiResult<ForecastResponse>> {
+  const query = new URLSearchParams();
+  if (opts.asset) query.set('asset', opts.asset);
+  if (opts.horizon) query.set('horizon', opts.horizon);
+  const qs = query.toString();
+  return apiGet<ForecastResponse>(`/forecast${qs === '' ? '' : `?${qs}`}`);
+}
+
+// ---------------------------------------------------------------------------
 // The two-layer state (§2) — FinEquity, P3-A
 // ---------------------------------------------------------------------------
 

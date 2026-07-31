@@ -241,24 +241,24 @@ stable and the replay test passes. Raising `kalman_maxiter` does nothing.
 
 ---
 
-## 9. `risk_score` is not the RII
+## 9. RESOLVED — `risk_score` is now the RII
 
-**Status:** interim by construction.
+**Status:** fixed in M4.
 
-`AssetState.risk_score` is currently the posterior-weighted regime severity on a
-0–100 axis, not the §3.2 Regime Instability Index. It is one of the RII's inputs.
-Named as it is because the contract field is `risk_score`; the distinction is in
-the engine docstring and in this list.
+`AssetState.risk_score` was the posterior-weighted regime severity, which was one
+of the RII's inputs standing in for the whole thing. It is now the §3.2 composite
+from `rii.py`. See issue 12 for how well it actually discriminates.
 
 ---
 
-## 10. `expected_return` is regime-conditional, not a forecast
+## 10. RESOLVED — `expected_return` is now the simulated median
 
-**Status:** interim by construction.
+**Status:** fixed in M4.
 
-It is the posterior-weighted mean return of the fitted states, annualized — what
-the fitted model implies about *now*, not the §10 Monte Carlo distribution
-median. It also inherits the calibration series' realized returns.
+It is now the median of the strategic-horizon Monte Carlo distribution rather
+than the posterior-weighted mean of the fitted state returns. It still inherits
+the calibration series' realized returns through the fitted regime statistics,
+which is issue 7, not this one.
 
 ---
 
@@ -294,6 +294,116 @@ loaded `equity-1.0.0+cal.yahoo_gspc` from R2 and published a state.
 
 ---
 
+## 12. RESOLVED — the RII was being ranked against eight years
+
+**Status:** fixed. Recorded because the broken version was measured, written up
+as a design limitation of §3.2, and was nothing of the kind.
+
+The first working RII separated March 2020 from a calm 2021 by **1.3 points on a
+0–100 scale**, and the per-component breakdown showed posterior entropy,
+confidence deficit and correlation breakdown all moving *against* the composite.
+The conclusion drawn from that — that §3.2's use of model uncertainty is
+structurally wrong, because in a crash the HMM is confident and its entropy
+collapses — was wrong, and it was wrong in the most convincing possible way: it
+had a mechanism, and the mechanism is real, it just was not what was happening.
+
+What was actually happening: every RII component is scored as an **expanding
+percentile**, and the index was being computed on the publication path. That path
+is `FRED:SP500`, which FRED caps at ten years. So a 2020 reading was being ranked
+against a window starting in 2016, `jerk` had not finished warming up, `vol_of_vol`
+was ranked against a sample containing exactly one crash, and several components
+were NaN for most of the window. Every one of those pushes the composite toward
+the middle, and the "components disagree" table was mostly warm-up artifacts.
+
+The index is now computed on the **calibration** path — the same index, back to
+1927 — and sliced to the publication dates for publishing. On that basis
+(`docs/backtests/equity-p3c.md` §2):
+
+| | RII |
+|---|---|
+| 2000 dot-com, peak | 96.5 |
+| 2008 GFC, peak | 95.7 |
+| 2020 COVID, peak | 82.3 |
+| 2022 rate shock, peak | 93.1 |
+| 1995, mean | 38.4 |
+| 2005, mean | 45.2 |
+| 2017, mean | 34.2 |
+| 2021, mean | 52.0 |
+
+**Separation: +49.4 points.** Every component moves with the composite, including
+the two that appeared to be inverted — confidence deficit is the *largest*
+contributor at +69.1.
+
+Two things worth keeping from this:
+
+- **A percentile is a claim about the reference window**, and the window is not
+  visible in the output. A 0–100 score looks equally authoritative whether it was
+  ranked against a century or against four years, which is precisely why this was
+  measured, believed and written down before anyone checked what it was ranked
+  against.
+- **A mechanism is not evidence.** The entropy-collapse story was plausible,
+  correct in isolation, and had nothing to do with the observed numbers. It was
+  accepted because it explained them.
+
+---
+
+## 13. FRED vintage requests silently truncate to the wrong century
+
+**Status:** worked around, root cause understood.
+
+Fetching `NFCI` through the vintage path returned exactly **100,000 rows covering
+1971–1976** — a full-looking response that was a *prefix*, not the series. The
+FRED observations endpoint caps a response at 100,000 rows and paginates; with
+`realtime_start`/`realtime_end` set, every observation is returned once per
+vintage, so a weekly series with 50 years of revisions blows through the cap
+inside the first five years and the remaining 45 are simply absent.
+
+Nothing errored. The rows were real, correctly dated, and correctly PIT — just
+one twentieth of the series.
+
+The RII's liquidity component now fetches NFCI with `use_vintages=False`. That is
+a real weakening: NFCI *is* revised, so the component reads today's values at
+historical dates. It is recorded here rather than buried because it is a
+lookahead of exactly the kind this system exists to avoid, bounded to one
+component of one composite. The correct fix is pagination in the FRED provider,
+which is a Phase-1 change.
+
+---
+
+## 14. The high-yield spread starts in 2023
+
+**Status:** external constraint, not a bug.
+
+`BAMLH0A0HYM2` returns 787 rows beginning 2023-08 through the API key in use.
+ICE BofA licenses the index and FRED restricts historical depth accordingly.
+
+The consequence is concrete: `credit_velocity` is one of seven RII components and
+one of four fragility sub-scores, and neither can see 2008 or 2020. The crash
+decomposition's transmission factor is therefore reading a three-year window for
+its credit inputs and a full history for the rest. Both are published, so the
+imbalance is visible in `fragility_*`, but no test can catch a component that is
+merely young.
+
+---
+
+## 15. The transmission floor is a judgement call
+
+**Status:** open, and a number someone should argue with.
+
+`TRANSMISSION_FLOOR = 0.10`. Without it, every fragility sub-score clips to zero
+in benign conditions, transmission reads 0.012, and — because crash risk is a
+*product* — the composite goes to roughly zero in exactly the calm periods where
+a reader most wants to see a small non-zero number.
+
+The floor asserts that a shock in calm conditions transmits *less*, not that it
+fails to transmit. That is the right shape. The specific value 0.10 is not
+derived from anything: it was chosen so the published composite stays legible,
+which means it sets a hard lower bound on crash risk that no data can move.
+A reader should treat crash-risk readings near the floor as "the model has
+nothing to say", not as a measurement.
+
+---
+
 ## Smaller things
 
 - **`derived_features` and `engine_output` overlap.** The kinematic path is
@@ -307,5 +417,10 @@ loaded `equity-1.0.0+cal.yahoo_gspc` from R2 and published a state.
   the two rules that used volatility each mislabelled a real series — so this is
   expected, and the test asserts `crisis` is at or above median volatility rather
   than the maximum.
+- **Monte Carlo shock recovery is total.** `SHOCK_RETRACE = 1.0`: the overlay
+  contributes the *shape* of a tail event and none of its permanent loss, because
+  the permanent loss is already inside the fitted regime means. Partial retrace
+  double-counted it and took the 12-year median from 6%/yr to 2.7%/yr against a
+  6.1% historical. The test pins the drift-neutrality rather than the constant.
 - **The backtest takes ~80 seconds** and is therefore a committed artifact
   regenerated by `python -m jobs.backtest`, not a CI check.

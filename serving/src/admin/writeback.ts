@@ -1,5 +1,5 @@
 import type { Env } from '../types';
-import { ASSETS, FORCES } from '../domain';
+import { ASSETS, FORCES, HORIZONS } from '../domain';
 
 /**
  * Compute-plane write-back (FINDYN_V1_SPEC.md §6).
@@ -139,6 +139,23 @@ export interface RegimeStateRow {
   model_version: string;
 }
 
+/**
+ * P3-C: one quantile of one horizon's forecast.
+ *
+ * There is no column for a point forecast, and that is the §0 non-goal made
+ * structural rather than conventional: a schema that cannot represent a
+ * deterministic price target cannot accidentally acquire one.
+ */
+export interface ForecastRow {
+  asset: string;
+  as_of: string;
+  horizon: string;
+  quantile: number;
+  value: number;
+  educational_only: boolean;
+  model_version: string;
+}
+
 export interface WriteBackPayload {
   model_version?: string;
   generated_at?: string;
@@ -152,6 +169,7 @@ export interface WriteBackPayload {
   engine_output?: EngineOutputRow[];
   derived_features?: DerivedFeatureRow[];
   regime_state?: RegimeStateRow[];
+  forecast_distribution?: ForecastRow[];
 }
 
 export interface WriteBackResult {
@@ -165,6 +183,7 @@ export interface WriteBackResult {
   engine_output: number;
   derived_features: number;
   regime_state: number;
+  forecast_distribution: number;
 }
 
 export class PayloadError extends Error {}
@@ -381,6 +400,16 @@ export function validatePayload(raw: unknown): WriteBackPayload {
     model_version: requireString(r?.model_version, `regime_state[${i}].model_version`),
   }));
 
+  const forecasts = (p.forecast_distribution as ForecastRow[] | undefined)?.map((f, i) => ({
+    asset: requireMember(f?.asset, ASSETS, `forecast_distribution[${i}].asset`),
+    as_of: requireDate(f?.as_of, `forecast_distribution[${i}].as_of`),
+    horizon: requireMember(f?.horizon, HORIZONS, `forecast_distribution[${i}].horizon`),
+    quantile: requireRange(f?.quantile, 0, 1, `forecast_distribution[${i}].quantile`),
+    value: requireNumber(f?.value, `forecast_distribution[${i}].value`),
+    educational_only: Boolean(f?.educational_only),
+    model_version: requireString(f?.model_version, `forecast_distribution[${i}].model_version`),
+  }));
+
   return {
     model_version: modelVersion,
     generated_at: typeof p.generated_at === 'string' ? p.generated_at : new Date().toISOString(),
@@ -394,6 +423,7 @@ export function validatePayload(raw: unknown): WriteBackPayload {
     engine_output: engineOutput,
     derived_features: derivedFeatures,
     regime_state: regimeState,
+    forecast_distribution: forecasts,
   };
 }
 
@@ -404,7 +434,10 @@ async function runBatched(db: D1Database, statements: D1PreparedStatement[]): Pr
   return statements.length;
 }
 
-export async function applyWriteBack(env: Env, payload: WriteBackPayload): Promise<WriteBackResult> {
+export async function applyWriteBack(
+  env: Env,
+  payload: WriteBackPayload,
+): Promise<WriteBackResult> {
   const now = new Date().toISOString();
   const db = env.DB;
 
@@ -493,6 +526,14 @@ export async function applyWriteBack(env: Env, payload: WriteBackPayload): Promi
        probability = excluded.probability`,
   );
 
+  const forecastStmt = db.prepare(
+    `INSERT INTO forecast_distribution
+       (as_of, horizon, quantile, value, educational_only, model_version, asset)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(asset, as_of, horizon, quantile, model_version) DO UPDATE SET
+       value = excluded.value, educational_only = excluded.educational_only`,
+  );
+
   const result: WriteBackResult = {
     metadata: 0,
     observations: 0,
@@ -504,6 +545,7 @@ export async function applyWriteBack(env: Env, payload: WriteBackPayload): Promi
     engine_output: 0,
     derived_features: 0,
     regime_state: 0,
+    forecast_distribution: 0,
   };
 
   if (payload.metadata?.length) {
@@ -575,7 +617,14 @@ export async function applyWriteBack(env: Env, payload: WriteBackPayload): Promi
     result.ingestion = await runBatched(
       db,
       payload.ingestion.map((g) =>
-        logStmt.bind(now, g.source, g.series_id ?? null, g.status, g.rows_written ?? 0, g.error ?? null),
+        logStmt.bind(
+          now,
+          g.source,
+          g.series_id ?? null,
+          g.status,
+          g.rows_written ?? 0,
+          g.error ?? null,
+        ),
       ),
     );
   }
@@ -645,6 +694,23 @@ export async function applyWriteBack(env: Env, payload: WriteBackPayload): Promi
       db,
       payload.regime_state.map((r) =>
         regimeStmt.bind(r.asset, r.as_of, r.regime, r.probability, r.model_version),
+      ),
+    );
+  }
+
+  if (payload.forecast_distribution?.length) {
+    result.forecast_distribution = await runBatched(
+      db,
+      payload.forecast_distribution.map((f) =>
+        forecastStmt.bind(
+          f.as_of,
+          f.horizon,
+          f.quantile,
+          f.value,
+          f.educational_only ? 1 : 0,
+          f.model_version,
+          f.asset,
+        ),
       ),
     );
   }

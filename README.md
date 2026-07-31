@@ -253,15 +253,20 @@ disclaimer.
 | `GET /api/v1/assets` | Registered engines with status and staleness | ✅ P1 |
 | `GET /api/v1/assets/:asset/state` | Latest `AssetState` for one engine | ✅ P1 |
 | `GET /api/v1/assets/:asset/history?metric=` | `engine_output` time series | ✅ P1 |
-| `GET /api/v1/state` | Latest K(t) + F(t) snapshot | M2 |
-| `GET /api/v1/forces` | Force score history with component breakdowns | M2 |
-| `GET /api/v1/regime` | Regime probability history | M3 |
-| `GET /api/v1/instability` | RII + crash decomposition history | M4 |
-| `GET /api/v1/forecast` | Quantile distribution per horizon | M4 |
-| `GET /api/v1/simulate` | Monte Carlo summary statistics | M4 |
+| `GET /api/v1/state` | Latest K(t) + F(t) snapshot | ✅ M2 |
+| `GET /api/v1/forces` | Force score history with component breakdowns | ✅ M2 |
+| `GET /api/v1/regime` | Regime probability history | ✅ M3 |
+| `GET /api/v1/instability` | RII + crash decomposition history | ✅ M4 |
+| `GET /api/v1/forecast` | Quantile distribution per horizon | ✅ M4 |
+| `GET /api/v1/simulate` | Monte Carlo run parameters and summary statistics | ✅ M4 |
 
-Unbuilt endpoints return `501` with their milestone rather than an empty payload, so a consumer
-can distinguish "not built" from "no data".
+Every §13 endpoint now answers. The convention stays for the engines still to come: an unbuilt
+endpoint returns `501` with its milestone rather than an empty payload, so a consumer can
+distinguish "not built" from "no data" — `/assets/gold/state` does exactly this today.
+
+`/simulate` deliberately does not return paths. §11 archives the path bundles to R2 for offline
+analysis; ten thousand paths per horizon is not a public payload, and what a caller actually wants
+from a simulation — the distribution — is `/forecast`.
 
 Example of the output contract (§12) — note the shape of the advice:
 
@@ -316,10 +321,10 @@ gold, crypto and portfolio engines.
 | M | Deliverable | Acceptance | Status |
 |---|---|---|---|
 | M0 | Repo scaffold, wrangler config, D1 migrations, CI | Deployable bundle validates; migrations apply; CI green | ✅ **Done** |
-| M1 | Provider adapters, ingestion workers, full backfill | All series backfilled with `release_date`; Yahoo isolated | ⬜ Next |
-| M2 | Feature pipeline (Kalman, FFD, forces) + write-back | Features reproducible; **no-lookahead replay test passes** | ⬜ |
-| M3 | HMM regime engine + XGBoost calibration | Walk-forward backtest over 2000/2008/2020/2022 | ⬜ |
-| M4 | RII, crash decomposition, Monte Carlo, EVT | GPD diagnostics committed; full backtest incl. monthly era | ⬜ |
+| M1 | Provider adapters, ingestion workers, full backfill | All series backfilled with `release_date`; Yahoo isolated | ✅ **Done** |
+| M2 | Feature pipeline (Kalman, FFD, forces) + write-back | Features reproducible; **no-lookahead replay test passes** | ✅ **Done** (P3-A) |
+| M3 | HMM regime engine + XGBoost calibration | Walk-forward backtest over 2000/2008/2020/2022 | ✅ **Done** (P3-B) |
+| M4 | RII, crash decomposition, Monte Carlo, EVT | GPD diagnostics committed; full backtest incl. monthly era | ✅ **Done** (P3-C) |
 | M5 | Public API, dashboard, degradation handling | All endpoints live; kill-a-provider chaos test stays up | ⬜ |
 | M6 | Documentation + runbook | Fresh clone → deployed system from the README alone | ⬜ |
 
