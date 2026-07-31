@@ -185,6 +185,41 @@ class AssetState:
 
 
 @dataclass(frozen=True)
+class DerivedFeature:
+    """One per-date model input for the ``derived_features`` table.
+
+    Distinct from :class:`EngineOutput` by exactly one thing, and it is the thing
+    that matters: ``model_version`` is part of the key. ``engine_output`` is what
+    an engine publishes for people to look at, so the newest run owns each date.
+    A feature is what a *model was fitted on*, so a refit that changes the
+    transform must land beside the old features rather than on top of them —
+    otherwise every backtest of the previous model silently becomes a backtest of
+    a feature set that model never saw.
+    """
+
+    asset: str
+    feature: str
+    as_of: date
+    value: float
+    #: Carried on the row, not taken from the run envelope: it is part of this
+    #: table's key, and a run publishing two engines has two versions.
+    model_version: str
+
+    def __post_init__(self) -> None:
+        if self.asset not in ASSETS:
+            raise ContractError(f"DerivedFeature.asset {self.asset!r} is not one of {list(ASSETS)}")
+        if not self.feature:
+            raise ContractError("DerivedFeature.feature must be non-empty")
+        if not self.model_version:
+            raise ContractError("DerivedFeature.model_version must be non-empty")
+        _check_date(self.as_of, "DerivedFeature.as_of")
+        if isinstance(self.value, bool) or not isinstance(self.value, int | float):
+            raise ContractError(f"DerivedFeature.value: expected a number, got {self.value!r}")
+        if not math.isfinite(self.value):
+            raise ContractError(f"DerivedFeature.value must be finite, got {self.value!r}")
+
+
+@dataclass(frozen=True)
 class EngineOutput:
     """One wide metric for the ``engine_output`` table (NS level/slope, carry, …).
 

@@ -222,7 +222,11 @@ export const ENGINE_LABELS: Record<string, { title: string; blurb: string; href?
     blurb: 'Interest-rate dynamics — Nelson-Siegel curve factors and rate regimes',
     href: '/rates',
   },
-  equity: { title: 'FinEquity', blurb: 'Growth and risk premium — kinematics, regimes, instability' },
+  equity: {
+    title: 'FinEquity',
+    blurb: 'Growth and risk premium — kinematics, regimes, instability',
+    href: '/equity',
+  },
   gold: { title: 'FinGold', blurb: 'Trust and crisis protection — regime switching on real rates' },
   crypto: { title: 'FinCrypto', blurb: 'Network scarcity — experimental, excluded from portfolios' },
 };
@@ -376,15 +380,69 @@ export function getAssetHistory(
   return apiGet<AssetHistory>(`/assets/${encodeURIComponent(asset)}/history?${query}`);
 }
 
+// ---------------------------------------------------------------------------
+// The two-layer state (§2) — FinEquity, P3-A
+// ---------------------------------------------------------------------------
+
+export interface KinematicState {
+  as_of: string | null;
+  model_version: string | null;
+  /** Feature name -> value, in **model units**: `price_filtered` is a log level. */
+  features: Record<string, number>;
+}
+
+export interface ForceSnapshot {
+  as_of: string | null;
+  scores: Record<string, number>;
+  components: Record<string, Record<string, number> | null>;
+}
+
+export interface TwoLayerState {
+  kinematics: KinematicState;
+  forces: ForceSnapshot;
+  /** Null until the regime model lands (P3-B), and explicitly so. */
+  regime: null | { label: string; confidence: number | null; model_version: string };
+}
+
+export interface ForcePoint {
+  as_of: string;
+  force: string;
+  score: number;
+  components: Record<string, number> | null;
+  model_version: string;
+}
+
+export interface ForceHistory {
+  count: number;
+  forces: string[];
+  points: ForcePoint[];
+}
+
+/** K(t) + F(t) on the newest date each layer has been computed for. */
+export const getTwoLayerState = () => apiGet<TwoLayerState>('/state');
+
+export function getForces(
+  opts: { force?: string; from?: string; to?: string; limit?: number } = {},
+): Promise<ApiResult<ForceHistory>> {
+  const query = new URLSearchParams();
+  if (opts.force) query.set('force', opts.force);
+  if (opts.from) query.set('from', opts.from);
+  if (opts.to) query.set('to', opts.to);
+  if (opts.limit !== undefined) query.set('limit', String(opts.limit));
+  const qs = query.toString();
+  return apiGet<ForceHistory>(`/forces${qs === '' ? '' : `?${qs}`}`);
+}
+
 /**
  * Endpoints the spec reserves (§13) whose milestones have not landed.
  * The dashboard probes them so the roadmap it shows is the API's own answer
  * rather than a hard-coded list of statuses.
+ *
+ * `/state` and `/forces` left this list in P3-A, when the equity feature path
+ * and Layer 0 gave them something true to serve.
  */
 export const RESERVED_ENDPOINTS = [
-  { path: '/state', summary: 'Latest kinematic state K(t) + force state F(t)' },
   { path: '/regime', summary: 'Regime probability history' },
-  { path: '/forces', summary: 'Force scores with component breakdowns' },
   { path: '/instability', summary: 'RII + crash-risk decomposition history' },
   { path: '/forecast', summary: 'Quantile forecast distributions per horizon' },
   { path: '/simulate', summary: 'Monte Carlo summary statistics' },

@@ -12,7 +12,28 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import ClassVar
 
-from findynamics.core.contracts.state import AssetState, EngineOutput, WorldState
+from findynamics.core.contracts.state import (
+    AssetState,
+    DerivedFeature,
+    EngineOutput,
+    WorldState,
+)
+
+
+# Deliberately not named *Error (hence the noqa): this is not a failure. It is
+# an engine's correct answer when it has nothing to publish, and the job layer
+# branches on that distinction.
+class StateUnavailable(RuntimeError):  # noqa: N818
+    """The engine has nothing to publish, and that is the expected answer.
+
+    Distinct from a crash on purpose. An engine whose model is not fitted yet, or
+    whose information set is too thin to speak about, has given a *correct*
+    answer by declining — and the job layer treats it as one: the run is not
+    failed, the engine's other outputs are still published, and the state
+    endpoint keeps saying "no state" rather than serving a fabricated one.
+
+    Anything else escaping ``predict`` is a bug and is logged as a failure.
+    """
 
 
 class AssetEngine(ABC):
@@ -39,8 +60,20 @@ class AssetEngine(ABC):
 
     @abstractmethod
     def predict(self, world: WorldState) -> AssetState:
-        """Pure function of (fitted params, world). Daily cadence."""
+        """Pure function of (fitted params, world). Daily cadence.
+
+        Raises :class:`StateUnavailable` when the engine is working correctly and
+        still has nothing to say.
+        """
 
     def outputs(self, world: WorldState) -> tuple[EngineOutput, ...]:
         """Optional wide metrics for the ``engine_output`` table."""
+        return ()
+
+    def derived_features(self, world: WorldState) -> tuple[DerivedFeature, ...]:
+        """Optional per-date model inputs for the ``derived_features`` table.
+
+        Separate from :meth:`outputs` because these rows are versioned by model:
+        see :class:`~findynamics.core.contracts.state.DerivedFeature`.
+        """
         return ()

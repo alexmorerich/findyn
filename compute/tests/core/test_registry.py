@@ -199,7 +199,7 @@ def test_load_engines_reports_what_config_enabled():
     from findynamics.engines import load_engines
 
     # Idempotent by design — several jobs call it in one process.
-    assert load_engines() == load_engines() == ("money", "rates")
+    assert load_engines() == load_engines() == ("money", "rates", "equity")
 
 
 def test_importing_an_engine_package_is_what_registers_it():
@@ -229,8 +229,8 @@ def test_importing_an_engine_package_is_what_registers_it():
     )
 
     assert probe.returncode == 0, probe.stderr
-    # P1 ships rates, P2 ships money. Anything else here is scope creep.
-    assert probe.stdout.strip() == "money,rates"
+    # P1 ships rates, P2 money, P3-A equity. Anything else here is scope creep.
+    assert probe.stdout.strip() == "equity,money,rates"
 
 
 def test_a_registered_engine_can_run_end_to_end(pit_accessor):

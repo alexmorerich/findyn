@@ -25,7 +25,9 @@ describe('public API (FINDYN_V1_SPEC.md §13)', () => {
     expect(body.data.ok).toBe(true);
   });
 
-  it.each(['state', 'regime', 'forces', 'instability', 'forecast', 'simulate'])(
+  // Still reserved. /state and /forces moved off this list in P3-A, when the
+  // equity feature path and Layer 0 gave them something true to say.
+  it.each(['regime', 'instability', 'forecast', 'simulate'])(
     'reserves /api/v1/%s with an explicit 501 and its milestone',
     async (route) => {
       const res = await SELF.fetch(`https://findyn.test/api/v1/${route}`);
@@ -33,6 +35,20 @@ describe('public API (FINDYN_V1_SPEC.md §13)', () => {
       const body = (await res.json()) as { error: string; milestone: string };
       expect(body.error).toBe('not_implemented');
       expect(body.milestone).toMatch(/^M[0-9]$/);
+    },
+  );
+
+  it.each(['state', 'forces'])(
+    'serves /api/v1/%s on an empty database rather than erroring',
+    async (route) => {
+      // The endpoints are live from P3-A, but a fresh database has no features
+      // and no scores. That must read as "nothing yet", not as a 500 — the
+      // dashboard renders an awaiting state off exactly this shape.
+      const res = await SELF.fetch(`https://findyn.test/api/v1/${route}`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { as_of: string | null; stale: boolean };
+      expect(body.as_of).toBeNull();
+      expect(body.stale).toBe(true);
     },
   );
 

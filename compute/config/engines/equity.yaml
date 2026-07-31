@@ -1,3 +1,58 @@
-# FinEquity — the FINDYN_V1_SPEC.md model stack (Phase 3). Not built yet.
-# Its private price series live in series.yaml under engines.equity.series.
-enabled: false
+# FinEquity — the FINDYN_V1_SPEC.md model stack (Phase 3).
+#
+# Sub-milestone A (spec M2) has landed: role resolution and the causal feature
+# path. The engine is enabled because it publishes real features on every run;
+# it does not yet publish an AssetState, because that needs the regime model
+# from sub-milestone B and a placeholder regime would be fiction on a dashboard.
+#
+# Its price series live in series.yaml under engines.equity.series, named by
+# where the data comes from. findynamics/engines/equity/prices.py is the only
+# place those names become the engine's own (publication / calibration /
+# deep_history), and the resolution is stamped into model_version.
+enabled: true
+
+prices:
+  # Below this many knowable observations a configured role does not count as
+  # present. A half-finished backfill is not a training set, and letting one win
+  # the calibration precedence would move the training window silently — which
+  # is the failure the fixed precedence exists to prevent.
+  min_observations: 250
+
+features:
+  # Fractional differentiation (§8.2). `d` is searched on the training window
+  # and frozen PER SERIES: the publication series holds ten years and the
+  # calibration series forty, and their minimum stationary `d` has no reason to
+  # be the same number. One shared `d` is a silent error, not a simplification.
+  ffd_threshold: 1.0e-5
+  # ADF at 95% confidence, as the spec specifies.
+  ffd_significance: 0.05
+  # How far back one FFD value is allowed to remember. The threshold alone does
+  # not bound the window usefully — at d=0.3 the weights need ~2,300 lags to fall
+  # under 1e-5, which is wider than the whole publication series and would leave
+  # a couple of hundred usable rows and no 12-month momentum. In years, so the
+  # same number means one year on the daily paths and one year on the monthly
+  # deep history rather than 252 lags on both.
+  ffd_max_memory_years: 1.0
+
+  # Expanding-window baseline for the jerk z-score (§8.3 asks for ten years).
+  # FRED:SP500 is licence-capped to roughly ten years in total, so the baseline
+  # degrades to half the available history rather than emitting a column of NaN;
+  # when it does, the state says so (`jerk_baseline_is_short`).
+  z_min_years: 10.0
+
+  # Momentum windows in months (§2.1's 21/63/252 trading days). Months rather
+  # than observations so the same numbers mean the same spans on the daily paths
+  # and on the monthly deep history.
+  momentum_months: [1, 3, 12]
+
+  # MLE iteration cap for the local linear trend variances. Raising it does not
+  # help on an index price: the likelihood is nearly flat in the trend variance,
+  # so the optimizer stops at a boundary solution after ~20 iterations whatever
+  # the cap. That solution is stable and its filtered path is the one used; the
+  # non-convergence is recorded as a diagnostic rather than treated as a failure.
+  kalman_maxiter: 200
+
+outputs:
+  # How far back the per-date histories are republished each run. Upserts are
+  # idempotent, so a longer window costs write time, never accuracy.
+  history_days: 1825

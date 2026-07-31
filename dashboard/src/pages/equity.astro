@@ -1,0 +1,103 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="FinEquity"
+  description="Market kinematics for the S&P 500 — the Kalman-filtered price level, its velocity and acceleration, and the jerk instability indicator, from the FinDynamics equity engine."
+  eyebrow="Asset engine"
+  heading="FinEquity — market kinematics"
+  intro="Where the market is, how fast it is moving, and whether that movement is strengthening or weakening. This is the first of three sub-milestones: the causal feature path. Regimes, the instability index and forecast distributions come next, and the panels for them are absent rather than empty. Everything on this page is read from the live API by your browser."
+>
+  <section class="panel" aria-labelledby="k-h">
+    <div class="panel__head">
+      <h2 id="k-h">Kinematic state K(t)</h2>
+      <span class="panel__note">/api/v1/state</span>
+    </div>
+    <p class="prose">
+      The spec&rsquo;s Layer A: <em>what is the market doing?</em> Every value here is estimated
+      from information available on its own date &mdash; the Kalman <strong>filtered</strong>
+      estimate, never the smoother, because the smoother conditions on the whole sample and would
+      put tomorrow&rsquo;s close into today&rsquo;s velocity.
+    </p>
+    <div id="equity-state" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="regime-h">
+    <div class="panel__head">
+      <h2 id="regime-h">Regime</h2>
+      <span class="panel__note">Layer B &middot; sub-milestone P3-B</span>
+    </div>
+    <div id="equity-regime"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="price-h">
+    <div class="panel__head">
+      <h2 id="price-h">Filtered price against the close</h2>
+      <span class="panel__note">/api/v1/assets/equity/history?metric=price_close &amp; price_filtered</span>
+    </div>
+    <p class="prose">
+      The raw index close and the filtered level of the local-linear-trend model. The filter is
+      what makes the derivatives below meaningful: differencing a raw index twice is mostly
+      microstructure, because differencing amplifies noise roughly in proportion to the order.
+      Both series are in index points here; the model works in logs.
+    </p>
+    <div id="equity-price" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="kin-h">
+    <div class="panel__head">
+      <h2 id="kin-h">Velocity and acceleration</h2>
+      <span class="panel__note">/api/v1/assets/equity/history?metric=velocity &amp; acceleration</span>
+    </div>
+    <p class="prose">
+      Velocity is the filter&rsquo;s trend state, annualized &mdash; the drift the model currently
+      believes in, not the last two closes. Acceleration is its rate of change, per year squared.
+      A positive velocity with negative acceleration is a rally losing its slope, which is the
+      distinction this panel exists to make visible.
+    </p>
+    <div id="equity-kinematics" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="jerk-h">
+    <div class="panel__head">
+      <h2 id="jerk-h">Jerk &mdash; trend instability</h2>
+      <span class="panel__note">/api/v1/assets/equity/history?metric=jerk_z</span>
+    </div>
+    <p class="prose">
+      The third derivative is deliberately demoted. Financial series are noisy and a raw third
+      derivative is almost entirely noise, so it is published <strong>only</strong> as a z-score
+      against the series&rsquo; own expanding history, read through a threshold: calm, elevated
+      beyond two standard deviations, extreme beyond three. It says the trend is becoming
+      unstable. It does not say which way.
+    </p>
+    <div id="equity-jerk" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="forces-h">
+    <div class="panel__head">
+      <h2 id="forces-h">Force state F(t)</h2>
+      <span class="panel__note">/api/v1/forces</span>
+    </div>
+    <p class="prose">
+      The spec&rsquo;s Layer B inputs: <em>why is it doing this?</em> Kept strictly apart from the
+      kinematics above, because price derivatives and economic drivers answer different questions
+      and mixing them produces a number that answers neither. Each score is a point-in-time
+      expanding-window percentile on one axis &mdash; 100 is maximally risk-supportive &mdash; and
+      each carries the breakdown that produced it.
+    </p>
+    <div id="equity-forces" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="provenance-h">
+    <div class="panel__head">
+      <h2 id="provenance-h">Where the numbers come from</h2>
+      <span class="panel__note">model_version &middot; series provenance</span>
+    </div>
+    <div id="equity-provenance"></div>
+  </section>
+</Base>
+
+<script>
+  import '../scripts/equity';
+</script>

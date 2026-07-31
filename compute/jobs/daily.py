@@ -22,7 +22,14 @@ from pathlib import Path
 from typing import Any
 
 from findynamics.core.config import SeriesConfig, load_series_config
-from findynamics.core.contracts.state import AssetState, EngineOutput, FactorState, WorldState
+from findynamics.core.contracts.state import (
+    AssetState,
+    DerivedFeature,
+    EngineOutput,
+    FactorState,
+    WorldState,
+)
+from findynamics.core.engine import StateUnavailable
 from findynamics.core.registry import enabled_engines
 from findynamics.data.accessor import PandasPITAccessor
 from findynamics.data.store import load_observations, required_series_ids
@@ -126,6 +133,23 @@ def engine_output_payload(output: EngineOutput) -> dict[str, Any]:
     }
 
 
+def derived_feature_payload(feature: DerivedFeature) -> dict[str, Any]:
+    """One ``derived_features`` row.
+
+    ``model_version`` rides on the row rather than being read off the envelope,
+    because it is part of this table's primary key: a run publishing two engines
+    has two versions, and the envelope's joined string is a version no single
+    model ever had.
+    """
+    return {
+        "asset": feature.asset,
+        "feature": feature.feature,
+        "as_of": feature.as_of.isoformat(),
+        "value": feature.value,
+        "model_version": feature.model_version,
+    }
+
+
 def run(
     as_of: date,
     *,
@@ -143,39 +167,72 @@ def run(
 
     states: list[dict[str, Any]] = []
     outputs: list[dict[str, Any]] = []
+    features: list[dict[str, Any]] = []
     failed: list[str] = []
+    silent: list[str] = []
 
     for engine in engines:
+        # An engine that declines to publish a state is answering correctly, not
+        # failing: its model may not be fitted yet, or the information set may be
+        # too thin to describe. Its per-date outputs are still worth publishing —
+        # that is the whole reason the two are separate methods — so the state is
+        # skipped and the run carries on.
+        state = None
         try:
             state = engine.predict(world)
-            rows = engine.outputs(world)
+        except StateUnavailable as err:
+            silent.append(engine.name)
+            log.info("engine %s published no state: %s", engine.name, err)
         except Exception as err:  # one engine's bad day is not the run's
             failed.append(engine.name)
             log.exception("engine %s failed: %s", engine.name, err)
             continue
 
-        states.append(asset_state_payload(state))
+        try:
+            rows = engine.outputs(world)
+            feature_rows = engine.derived_features(world)
+        except Exception as err:
+            failed.append(engine.name)
+            log.exception("engine %s failed publishing its outputs: %s", engine.name, err)
+            continue
+
+        if state is not None:
+            states.append(asset_state_payload(state))
         outputs.extend(engine_output_payload(row) for row in rows)
+        features.extend(derived_feature_payload(row) for row in feature_rows)
         log.info(
-            "%s: regime=%s risk=%.1f confidence=%.2f (+%d output rows)",
+            "%s: %s (+%d output rows, +%d features)",
             engine.name,
-            state.regime,
-            state.risk_score,
-            state.confidence,
+            (
+                "no state"
+                if state is None
+                else f"regime={state.regime} risk={state.risk_score:.1f} "
+                f"confidence={state.confidence:.2f}"
+            ),
             len(rows),
+            len(feature_rows),
         )
 
-    if not states:
-        log.error("every engine failed (%s); withholding the write-back", ", ".join(failed))
+    if not states and not outputs and not features:
+        log.error(
+            "no engine produced anything (failed: %s; silent: %s); withholding the write-back",
+            ", ".join(failed) or "none",
+            ", ".join(silent) or "none",
+        )
         return 1
 
+    # The envelope's version is a run label for the factor rows, which belong to
+    # no engine. Every per-engine row carries its own version in its own field.
+    versions = sorted({s["model_version"] for s in states} | {f["model_version"] for f in features})
+
     payload = {
-        "model_version": ",".join(sorted({s["model_version"] for s in states})),
+        "model_version": ",".join(versions) or "unversioned",
         "generated_at": datetime.now(UTC).isoformat(),
         "as_of": as_of.isoformat(),
         "factors": factor_payload(world.factors),
         "asset_state": states,
         "engine_output": outputs,
+        "derived_features": features,
     }
 
     if out is not None:
@@ -184,9 +241,22 @@ def run(
         out.write_text(json.dumps(payload, indent=2))
         log.info("wrote payload to %s", out)
 
-    chunks = list(chunk_on(payload, "engine_output", ENGINE_OUTPUT_BATCH_SIZE))
+    # Two tall arrays now, so the split is applied twice. Chaining works because
+    # a later chunk of the outer split carries no `derived_features` key at all,
+    # and chunk_on yields such a payload through untouched — so no row is sent
+    # twice and no chunk exceeds the batch size on either array.
+    chunks = [
+        inner
+        for outer in chunk_on(payload, "engine_output", ENGINE_OUTPUT_BATCH_SIZE)
+        for inner in chunk_on(outer, "derived_features", ENGINE_OUTPUT_BATCH_SIZE)
+    ]
     if len(chunks) > 1:
-        log.info("splitting %d output rows across %d requests", len(outputs), len(chunks))
+        log.info(
+            "splitting %d output + %d feature rows across %d requests",
+            len(outputs),
+            len(features),
+            len(chunks),
+        )
     for chunk in chunks:
         write_back(chunk, dry_run=dry_run)
 

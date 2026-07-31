@@ -101,6 +101,28 @@ export interface FactorRow {
   components?: Record<string, number> | null;
 }
 
+/**
+ * P3-A: the model inputs an engine was fitted on.
+ *
+ * Near-identical to EngineOutputRow, and the difference is the point:
+ * `model_version` is part of the primary key here. `engine_output` is what the
+ * dashboard draws, so the newest run owns each date; a feature is what a model
+ * *saw*, so a refit lands beside the old features rather than on top of them.
+ *
+ * Feature names are deliberately not checked against a closed vocabulary. The
+ * fixed five come from FINDYN_V1_SPEC.md §2.1, but the momentum windows are
+ * configurable in `config/engines/equity.yaml`, so their names are decided by
+ * the compute plane at runtime. Rejecting an unknown one here would mean a yaml
+ * edit could only ship together with a Worker deploy.
+ */
+export interface DerivedFeatureRow {
+  asset: string;
+  feature: string;
+  as_of: string;
+  value: number;
+  model_version: string;
+}
+
 export interface WriteBackPayload {
   model_version?: string;
   generated_at?: string;
@@ -112,6 +134,7 @@ export interface WriteBackPayload {
   factors?: FactorRow[];
   asset_state?: AssetStateRow[];
   engine_output?: EngineOutputRow[];
+  derived_features?: DerivedFeatureRow[];
 }
 
 export interface WriteBackResult {
@@ -123,6 +146,7 @@ export interface WriteBackResult {
   factors: number;
   asset_state: number;
   engine_output: number;
+  derived_features: number;
 }
 
 export class PayloadError extends Error {}
@@ -317,6 +341,16 @@ export function validatePayload(raw: unknown): WriteBackPayload {
     meta: o?.meta ?? null,
   }));
 
+  const derivedFeatures = (p.derived_features as DerivedFeatureRow[] | undefined)?.map((f, i) => ({
+    asset: requireMember(f?.asset, ASSETS, `derived_features[${i}].asset`),
+    feature: requireString(f?.feature, `derived_features[${i}].feature`),
+    as_of: requireDate(f?.as_of, `derived_features[${i}].as_of`),
+    value: requireNumber(f?.value, `derived_features[${i}].value`),
+    // Per row, not from the envelope: a run publishing two engines carries two
+    // versions, and this column is part of the key.
+    model_version: requireString(f?.model_version, `derived_features[${i}].model_version`),
+  }));
+
   return {
     model_version: modelVersion,
     generated_at: typeof p.generated_at === 'string' ? p.generated_at : new Date().toISOString(),
@@ -328,6 +362,7 @@ export function validatePayload(raw: unknown): WriteBackPayload {
     factors,
     asset_state: assetState,
     engine_output: engineOutput,
+    derived_features: derivedFeatures,
   };
 }
 
@@ -413,6 +448,13 @@ export async function applyWriteBack(env: Env, payload: WriteBackPayload): Promi
        value = excluded.value, meta = excluded.meta, written_at = excluded.written_at`,
   );
 
+  const featureStmt = db.prepare(
+    `INSERT INTO derived_features (asset, date, feature, value, model_version, computed_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(asset, date, feature, model_version) DO UPDATE SET
+       value = excluded.value, computed_at = excluded.computed_at`,
+  );
+
   const result: WriteBackResult = {
     metadata: 0,
     observations: 0,
@@ -422,6 +464,7 @@ export async function applyWriteBack(env: Env, payload: WriteBackPayload): Promi
     factors: 0,
     asset_state: 0,
     engine_output: 0,
+    derived_features: 0,
   };
 
   if (payload.metadata?.length) {
@@ -545,6 +588,15 @@ export async function applyWriteBack(env: Env, payload: WriteBackPayload): Promi
           o.meta === null || o.meta === undefined ? null : JSON.stringify(o.meta),
           now,
         ),
+      ),
+    );
+  }
+
+  if (payload.derived_features?.length) {
+    result.derived_features = await runBatched(
+      db,
+      payload.derived_features.map((f) =>
+        featureStmt.bind(f.asset, f.as_of, f.feature, f.value, f.model_version, now),
       ),
     );
   }
