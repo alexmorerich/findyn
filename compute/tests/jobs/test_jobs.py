@@ -14,6 +14,7 @@ import pytest
 from findynamics.core.contracts.state import AssetState, EngineOutput, FactorState, Signal
 from jobs._common import chunk_on
 from jobs.backfill import DEFAULT_BATCH_SIZE, chunk_payload, configured_series
+from jobs.backfill import run as backfill_run
 from jobs.daily import asset_state_payload, engine_output_payload, factor_payload, parse_as_of
 
 
@@ -32,6 +33,49 @@ class TestConfiguredSeries:
 
     def test_returns_nothing_for_a_provider_no_series_names(self):
         assert configured_series("nasdaq") == []
+
+
+class TestBackfillFromFile:
+    """Guards on ``--from-file``. Stooq's bot filter blocks every automated
+    egress this project has, so deep daily index history arrives as a file a
+    person downloaded; these are the ways that goes wrong."""
+
+    CSV = "Date,Open,High,Low,Close\n1928-01-03,17.76,17.76,17.76,17.76\n"
+
+    def _run(self, tmp_path, path, *, provider="stooq", series=None):
+        return backfill_run(
+            provider,
+            series or [],
+            start=None,
+            end=None,
+            dry_run=True,
+            force=False,
+            cache_dir=None,
+            out=None,
+            from_file=path,
+        )
+
+    def test_a_good_file_is_ingested(self, tmp_path):
+        path = tmp_path / "^spx_d.csv"
+        path.write_text(self.CSV)
+        assert self._run(tmp_path, path) == 0
+
+    def test_a_missing_file_is_refused_before_any_work(self, tmp_path):
+        assert self._run(tmp_path, tmp_path / "absent.csv") == 2
+
+    def test_it_is_refused_for_a_provider_that_has_no_file_format(self, tmp_path):
+        """Every provider's payload differs; only stooq's parser is wired up."""
+        path = tmp_path / "^spx_d.csv"
+        path.write_text(self.CSV)
+        assert self._run(tmp_path, path, provider="fred") == 2
+
+    def test_two_series_from_one_file_is_refused(self, tmp_path):
+        """One file holds one series. Ingesting it under two ids would write
+        one instrument's prices under another's name — silent, and expensive
+        to unpick from a point-in-time store."""
+        path = tmp_path / "^spx_d.csv"
+        path.write_text(self.CSV)
+        assert self._run(tmp_path, path, series=["STOOQ:^SPX", "STOOQ:^NDX"]) == 2
 
 
 class TestChunkPayload:

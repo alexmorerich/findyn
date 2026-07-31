@@ -23,6 +23,7 @@ from findynamics.core.config import SeriesSpec, get_series_config
 from findynamics.data.providers import build_provider
 from findynamics.data.providers.base import Provider, ProviderError
 from findynamics.data.providers.registry import KEYLESS_PROVIDERS
+from findynamics.data.providers.stooq import StooqFileProvider
 from findynamics.data.quality import DataQualityReport, QualityPolicy, check_series
 from findynamics.data.vintages import repair_pre_archive_releases
 from jobs._common import base_parser, chunk_on, configure_logging, write_back
@@ -89,8 +90,18 @@ def run(
     cache_dir: Path | None,
     out: Path | None,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    from_file: Path | None = None,
 ) -> int:
-    provider = build_provider(provider_id, cache_dir=cache_dir)
+    if from_file is not None:
+        if provider_id != "stooq":
+            log.error("--from-file is only implemented for --provider stooq, got %r", provider_id)
+            return 2
+        if not from_file.is_file():
+            log.error("--from-file: no such file: %s", from_file)
+            return 2
+        provider = StooqFileProvider(from_file)
+    else:
+        provider = build_provider(provider_id, cache_dir=cache_dir)
     # Config first, catalogue second. FRED hosts 800k series and exposes no
     # catalogue, so "everything this provider serves us" is a question only
     # series.yaml can answer — and answering it there is what lets a new engine's
@@ -101,6 +112,18 @@ def run(
             "%s has no series in series.yaml and exposes no default catalogue; "
             "name them explicitly with --series",
             provider_id,
+        )
+        return 2
+
+    # One file holds one series. Left unchecked, a default that resolved to two
+    # would parse the same CSV under both ids and write one series' prices under
+    # the other's name — silent, and expensive to unpick from a PIT store.
+    if from_file is not None and len(targets) != 1:
+        log.error(
+            "--from-file ingests one series from one file, but %d resolved (%s); "
+            "name exactly one with --series",
+            len(targets),
+            ", ".join(targets),
         )
         return 2
 
@@ -240,6 +263,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="write series even when the quality engine reports errors",
     )
+    parser.add_argument(
+        "--from-file",
+        help=(
+            "ingest a CSV already on disk instead of fetching (stooq only). "
+            "For history stooq's bot filter puts out of automated reach: download "
+            "https://stooq.com/q/d/l/?s=^spx&i=d in a browser and pass the file here."
+        ),
+    )
     parser.add_argument("--cache-dir", default=".cache", help="on-disk response cache")
     parser.add_argument("--out", help="also write the write-back payload to this file")
     parser.add_argument(
@@ -262,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
         cache_dir=Path(args.cache_dir) if args.cache_dir else None,
         out=Path(args.out) if args.out else None,
         batch_size=args.batch_size,
+        from_file=Path(args.from_file).expanduser() if args.from_file else None,
     )
 
 

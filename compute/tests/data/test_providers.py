@@ -11,6 +11,7 @@ import pytest
 
 from findynamics.data.providers.base import (
     AuthError,
+    BotChallengeError,
     NotFoundError,
     Observation,
     ProviderError,
@@ -28,7 +29,11 @@ from findynamics.data.providers.registry import (
 )
 from findynamics.data.providers.resilience import MemoryCache, RateLimiter, RetryPolicy, Transport
 from findynamics.data.providers.shiller import ShillerProvider, parse_shiller_date
-from findynamics.data.providers.stooq import StooqProvider, looks_like_bot_challenge
+from findynamics.data.providers.stooq import (
+    StooqFileProvider,
+    StooqProvider,
+    looks_like_bot_challenge,
+)
 from tests.conftest import FakeFetcher, ok
 
 
@@ -298,6 +303,79 @@ def test_bot_challenge_is_recognised(payload):
 
 def test_real_csv_is_not_mistaken_for_a_challenge():
     assert looks_like_bot_challenge(STOOQ_CSV) is False
+
+
+#: An index export: no Volume column, because an index has no volume. This is
+#: the shape the manual ^SPX download actually has, and the strict six-column
+#: header check rejected it.
+STOOQ_INDEX_CSV = (
+    "Date,Open,High,Low,Close\n"
+    "1928-01-03,17.76,17.76,17.76,17.76\n"
+    "1928-01-04,17.72,17.72,17.72,17.72\n"
+)
+
+
+def test_stooq_accepts_an_index_export_with_no_volume_column(clock, sleeper):
+    provider = StooqProvider(transport(FakeFetcher(ok(STOOQ_INDEX_CSV)), clock, sleeper, "stooq"))
+    observations = provider.fetch_observations("STOOQ:^SPX")
+    assert [o.value for o in observations] == [17.76, 17.72]
+
+
+class TestStooqFromFile:
+    """Reading the CSV off disk after a human downloaded it past the challenge."""
+
+    def _write(self, tmp_path, body, name="^spx_d.csv"):
+        path = tmp_path / name
+        path.write_text(body)
+        return path
+
+    def test_a_downloaded_file_parses_identically_to_a_fetch(self, tmp_path, clock, sleeper):
+        """Same parser, so file-sourced and network-sourced rows must match."""
+        fetched = StooqProvider(
+            transport(FakeFetcher(ok(STOOQ_CSV)), clock, sleeper, "stooq")
+        ).fetch_observations("STOOQ:^SPX")
+
+        from_file = StooqFileProvider(self._write(tmp_path, STOOQ_CSV)).fetch_observations(
+            "STOOQ:^SPX"
+        )
+
+        assert from_file == fetched
+
+    def test_it_reads_the_deep_index_history(self, tmp_path):
+        provider = StooqFileProvider(self._write(tmp_path, STOOQ_INDEX_CSV))
+        observations = provider.fetch_observations("STOOQ:^SPX")
+        assert observations[0].observation_date == date(1928, 1, 3)
+        assert observations[0].release_date == date(1928, 1, 3)
+
+    def test_range_filters_still_apply(self, tmp_path):
+        provider = StooqFileProvider(self._write(tmp_path, STOOQ_INDEX_CSV))
+        assert len(provider.fetch_observations("STOOQ:^SPX", start=date(1928, 1, 4))) == 1
+
+    def test_a_saved_challenge_page_is_reported_as_such(self, tmp_path):
+        """The likeliest way this goes wrong: the browser saved the interstitial.
+
+        Reported as a bot challenge with what to do about it, rather than as
+        'unexpected CSV header <html>', which names the symptom not the cause.
+        """
+        provider = StooqFileProvider(self._write(tmp_path, CHALLENGE_HTML))
+
+        with pytest.raises(BotChallengeError, match="saved the interstitial"):
+            provider.fetch_observations("STOOQ:^SPX")
+
+    def test_a_missing_file_is_a_clean_error(self, tmp_path):
+        provider = StooqFileProvider(tmp_path / "absent.csv")
+        with pytest.raises(ProviderError, match="cannot read"):
+            provider.fetch_observations("STOOQ:^SPX")
+
+    def test_metadata_records_where_the_rows_came_from(self, tmp_path):
+        """A file-sourced series must be traceable to the file that supplied it."""
+        provider = StooqFileProvider(self._write(tmp_path, STOOQ_CSV))
+        assert "^spx_d.csv" in (provider.fetch_metadata("STOOQ:^SPX").notes or "")
+
+    def test_it_cannot_reach_the_network(self, tmp_path):
+        """No transport, deliberately — this must never become a silent fallback."""
+        provider = StooqFileProvider(self._write(tmp_path, STOOQ_CSV))
+        assert not hasattr(provider, "transport")
 
 
 def test_stooq_challenge_fails_fast_rather_than_retrying(clock, sleeper):
