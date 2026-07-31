@@ -421,6 +421,43 @@ class EquityEngine(AssetEngine):
         series = frame[spec.id].dropna()
         return series if not series.empty else None
 
+    def _tail_fit(
+        self, features: dict[str, FeatureSet], block: dict[str, Any]
+    ) -> crash_mod.TailFit | None:
+        """The GPD behind ``p_shock``: fitted from deep history, or the refit's.
+
+        A tail estimate over 155 years of monthly data moves when a new crash
+        happens, which is to say roughly never on a daily cadence. Fitting it
+        monthly and carrying it in the artifact is both cheaper and more stable
+        than refitting nightly — and it is the only way the nightly run has one
+        at all, since deep history is not in `DAILY_ROLES`.
+        """
+        deep = features.get("deep_history")
+        if deep is not None:
+            try:
+                return crash_mod.fit_tail(
+                    deep.log_price,
+                    periods_per_year=deep.series.periods_per_year,
+                    series_id=deep.series.series_id,
+                    threshold=float(block.get("tail_threshold", crash_mod.DEFAULT_THRESHOLD)),
+                )
+            except crash_mod.TailFitError as err:
+                log.warning("equity: no tail fit (%s); p_shock falls back to a base rate", err)
+                return None
+
+        stored = self._artifacts.load(ARTIFACT_NAME).get("tail")
+        if not isinstance(stored, dict):
+            log.warning(
+                "equity: no deep history in this run and no stored tail; "
+                "p_shock falls back to a base rate until the next monthly refit"
+            )
+            return None
+        try:
+            return crash_mod.TailFit.from_dict(stored)
+        except (KeyError, TypeError, ValueError) as err:
+            log.warning("equity: stored tail fit is unreadable (%s)", err)
+            return None
+
     def _instability_view(
         self,
         world: WorldState,
@@ -486,18 +523,16 @@ class EquityEngine(AssetEngine):
 
         # The 1871+ tail. Deep history is the only admissible basis (§4) and it
         # is monthly, which is why the conversion is explicit in crash.py.
-        tail: crash_mod.TailFit | None = None
-        deep = features.get("deep_history")
-        if deep is not None:
-            try:
-                tail = crash_mod.fit_tail(
-                    deep.log_price,
-                    periods_per_year=deep.series.periods_per_year,
-                    series_id=deep.series.series_id,
-                    threshold=float(block.get("tail_threshold", crash_mod.DEFAULT_THRESHOLD)),
-                )
-            except crash_mod.TailFitError as err:
-                log.warning("equity: no tail fit (%s); p_shock falls back to a base rate", err)
+        #
+        # Fitted when the deep-history path is in this run's role set, loaded
+        # from the last refit otherwise. That second branch is what makes the
+        # factor real in production: `DAILY_ROLES` deliberately excludes deep
+        # history — it is a 155-year monthly rebuild for an estimate that moves
+        # on the timescale of a new crash — so a nightly run that could only
+        # *fit* the tail would never have one, and p_shock would be the flagged
+        # base rate every night forever. Which is exactly what it was, live,
+        # until this branch existed.
+        tail = self._tail_fit(features, block)
 
         labels = regime.model.fit.labels
         adverse = [i for i, label in enumerate(labels) if label in crash_mod.ADVERSE]
@@ -644,6 +679,12 @@ class EquityEngine(AssetEngine):
                 for feature_set in analysis.features.values()
             },
         }
+
+        # The tail travels with the fit. Every daily run after this one reads it
+        # from here rather than rebuilding 155 years of monthly features.
+        tail = self._tail_fit(analysis.features, self._block("instability"))
+        if tail is not None:
+            document["tail"] = tail.as_dict()
 
         calibration = analysis.features.get("calibration")
         if calibration is not None:

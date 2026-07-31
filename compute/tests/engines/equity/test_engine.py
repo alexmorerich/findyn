@@ -193,6 +193,51 @@ def test_the_artifact_records_which_series_supplied_the_parameters(
     assert roles["calibration_is_proxy"] is False
 
 
+def test_the_refit_stores_the_tail_and_the_daily_run_inherits_it(
+    equity_engine, equity_observations, artifacts
+):
+    """§4's p_shock must survive a run that has no deep history — and one did not.
+
+    `DAILY_ROLES` excludes `deep_history`: it is a 155-year monthly rebuild for
+    an estimate that only moves when a new crash happens. So a nightly run can
+    never *fit* the tail, and for one full deploy cycle it did not have one —
+    every published `p_shock` was the flagged 1−exp(−0.25) base rate, identical
+    on all 1254 dates, while `tail_fitted` said so in a field nobody was reading.
+
+    The fit stores it; the daily run loads it. Both halves are asserted here
+    because either alone is silently useless.
+    """
+    world = world_from(equity_observations)
+    equity_engine.fit(world)
+
+    stored = artifacts.load(ARTIFACT_NAME).get("tail")
+    assert stored is not None, "the monthly refit must persist the tail fit"
+    assert stored["series_id"] == DEEP_HISTORY
+    assert stored["periods_per_year"] == 12.0, "the deep record is monthly; the units matter"
+
+    equity_engine._cache = None
+    analysis = equity_engine.analyze(world)  # DAILY_ROLES — no deep history
+
+    assert "deep_history" not in analysis.features
+    view = analysis.instability
+    assert view is not None
+    assert view.tail is not None, "the daily run must inherit the refit's tail"
+    assert view.tail.series_id == DEEP_HISTORY
+    # And the factor it feeds must actually vary, which is the symptom that
+    # would have caught this: a constant p_shock is the fallback wearing a hat.
+    assert view.crash["p_shock"].nunique() > 1
+
+
+def test_without_a_stored_tail_p_shock_says_it_is_a_fallback(equity_engine, equity_observations):
+    """No fit yet: publish the base rate, flagged, rather than nothing or zero."""
+    analysis = equity_engine.analyze(world_from(equity_observations))
+    view = analysis.instability
+    if view is None:  # no regime model without a fit — nothing to assert
+        return
+    assert view.tail is None
+    assert view.factors[12].detail["tail_fitted"] == 0.0
+
+
 def test_a_daily_run_reuses_frozen_parameters(equity_engine, equity_observations):
     equity_engine.fit(world_from(equity_observations))
     equity_engine._cache = None

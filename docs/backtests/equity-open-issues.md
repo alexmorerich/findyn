@@ -404,6 +404,44 @@ nothing to say", not as a measurement.
 
 ---
 
+## 16. RESOLVED — production published a fallback `p_shock` for a full deploy cycle
+
+**Status:** fixed. Recorded because the *tests* were green, the *report* was
+right, and production was wrong anyway.
+
+The first live M4 run published `p_shock = 0.22119922` on all 1254 dates. Not a
+suspicious number — it is a plausible one-year probability of a 20% drawdown —
+and it sat beside an RII with 1254 distinct values and a `p_transition` with 504,
+so the row looked alive.
+
+It was `1 − exp(−0.25)`: the flagged unconditional base rate `crash_factors` uses
+when there is no tail fit. `DAILY_ROLES` is `("publication", "calibration")` —
+deep history is excluded deliberately, because rebuilding 155 years of monthly
+features nightly is expensive for an estimate that only changes when a new crash
+happens. So the nightly run could not fit the tail, and nothing else was going
+to: §4's whole extreme-value apparatus was inert in production while every local
+check that exercised it passed, because every local check ran with `ALL_ROLES`.
+
+The fit was correct, published, and honest about itself — `tail_fitted: 0.0`
+travelled in the detail on every row. It was simply a field nobody was reading.
+
+**Fix:** the tail is fitted by the monthly refit, which already runs `ALL_ROLES`,
+and stored in the artifact. The daily run loads it. `_tail_fit` fits when deep
+history is present and loads when it is not, so the same method serves both and
+neither path can drift from the other.
+
+Two things this cost, worth stating:
+
+- **A flag is not an alarm.** `tail_fitted: 0.0` was designed as the honest
+  admission and it worked exactly as designed — it just admitted it to nobody.
+  The test now asserts `p_shock` *varies*, because the symptom of the fallback is
+  a constant, and a constant is something a test can see.
+- **Role sets are a production/test skew surface.** Every test that touched the
+  tail used `ALL_ROLES` because that is what makes the fixture interesting. The
+  role set the nightly cron actually uses had no coverage at all.
+
+---
+
 ## Smaller things
 
 - **`derived_features` and `engine_output` overlap.** The kinematic path is
