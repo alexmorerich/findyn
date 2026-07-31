@@ -4,7 +4,6 @@
 FRED_API_KEY=your_fred_key
 BLS_API_KEY=your_bls_key
 BEA_API_KEY=your_bea_key
-ALPHAVANTAGE_API_KEY=your_alphavantage_key
 
 # Shared secret for the compute plane's HMAC-signed write-back (§6, §14).
 # Must match the ADMIN_HMAC_SECRET GitHub Actions secret used by compute/jobs/*.

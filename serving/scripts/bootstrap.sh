@@ -30,7 +30,6 @@ Next steps
      npx wrangler secret put FRED_API_KEY
      npx wrangler secret put BLS_API_KEY
      npx wrangler secret put BEA_API_KEY
-     npx wrangler secret put ALPHAVANTAGE_API_KEY
      npx wrangler secret put ADMIN_HMAC_SECRET     # openssl rand -hex 32
 5. Deploy:                        npm run deploy
 

@@ -476,3 +476,16 @@ def test_every_network_provider_has_a_documented_quota():
     assert set(QUOTAS) >= NETWORK_PROVIDERS
     for provider_id in NETWORK_PROVIDERS:
         assert QUOTAS[provider_id].note
+
+
+def test_every_provider_the_config_accepts_is_buildable():
+    """VALID_PROVIDERS may only name providers that actually exist.
+
+    The config once accepted `alphavantage` and `yahoo` with no adapter behind
+    them, so a series pointed at one passed validation and failed at fetch
+    time. `derived` is the single exception: computed downstream, never built.
+    """
+    from findynamics.core.config import VALID_PROVIDERS
+    from findynamics.data.providers.registry import NETWORK_PROVIDERS
+
+    assert VALID_PROVIDERS - {"derived"} == NETWORK_PROVIDERS

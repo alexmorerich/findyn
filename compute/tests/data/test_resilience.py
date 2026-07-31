@@ -219,6 +219,42 @@ def test_transport_does_not_retry_an_auth_failure(clock, sleeper):
     assert fetcher.call_count == 1
 
 
+def test_an_unexpected_status_quotes_the_body_and_carries_the_code(clock, sleeper):
+    """The body is what makes a 400 diagnosable; FRED's names the real cause."""
+    body = "Bad Request.  The series does not exist in ALFRED but may exist in FRED."
+    transport = _transport(FakeFetcher(ok(body, 400)), clock, sleeper)
+
+    with pytest.raises(ProviderError) as caught:
+        transport.get("https://example.test/a")
+
+    assert "does not exist in ALFRED" in str(caught.value)
+    assert caught.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Bad Request. api_key=abc123def456 is invalid",
+        '{"error":"bad","api_key":"abc123def456"}',
+        "https://api.bea.gov/?UserID=abc123def456&method=GetData",
+        '{"registrationkey": "abc123def456", "status": "REQUEST_NOT_PROCESSED"}',
+    ],
+)
+def test_an_error_body_never_leaks_a_credential(body, clock, sleeper):
+    """Some APIs echo the failing request, which for a keyed provider is the key.
+
+    Quoting that into an exception would put a live credential in CI logs,
+    turning a fixable error into one that needs the key rotated.
+    """
+    transport = _transport(FakeFetcher(ok(body, 400)), clock, sleeper)
+
+    with pytest.raises(ProviderError) as caught:
+        transport.get("https://example.test/a")
+
+    assert "abc123def456" not in str(caught.value)
+    assert "***" in str(caught.value)
+
+
 def test_transport_falls_back_to_stale_cache_when_the_source_dies(clock, sleeper):
     fetcher = FakeFetcher([ok("good"), ok("", 500)])
     transport = _transport(fetcher, clock, sleeper)

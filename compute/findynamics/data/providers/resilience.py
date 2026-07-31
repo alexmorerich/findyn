@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import random
+import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -33,6 +34,25 @@ log = logging.getLogger("findynamics.data.providers.resilience")
 
 Clock = Callable[[], float]
 Sleeper = Callable[[float], None]
+
+#: Credential parameter names across the adapters: FRED uses ``api_key``, BLS
+#: ``registrationkey``, BEA ``UserID``.
+_CREDENTIAL_PATTERN = re.compile(
+    r"\b(api_?key|registration_?key|user_?id|token|secret|password)"
+    r"(\"?\s*[:=]\s*\"?)([^\s\"&,}]+)",
+    re.IGNORECASE,
+)
+
+
+def redact_credentials(text: str) -> str:
+    """Mask credential values in text bound for a log or an exception message.
+
+    Error bodies are quoted back to the operator, and some APIs echo the request
+    that failed — which for a keyed provider means the key. Redacting at the
+    point of capture is what keeps a 400 from putting a live credential into CI
+    logs, where it would then need rotating rather than fixing.
+    """
+    return _CREDENTIAL_PATTERN.sub(r"\1\2***", text)
 
 
 @dataclass(frozen=True)
@@ -463,8 +483,21 @@ class Transport:
 
             return NotFoundError(self.provider, "HTTP 404")
         if 500 <= status < 600:
-            return ProviderError(self.provider, f"upstream error HTTP {status}", retryable=True)
-        return ProviderError(self.provider, f"unexpected HTTP {status}", retryable=False)
+            return ProviderError(
+                self.provider, f"upstream error HTTP {status}", retryable=True, status_code=status
+            )
+        # The body often names the actual complaint (FRED's 400s do); a snippet
+        # turns "unexpected HTTP 400" into something diagnosable from a log line.
+        try:
+            snippet = redact_credentials(" ".join(response.text.split())[:200])
+        except UnicodeDecodeError:
+            snippet = ""
+        return ProviderError(
+            self.provider,
+            f"unexpected HTTP {status}" + (f": {snippet}" if snippet else ""),
+            retryable=False,
+            status_code=status,
+        )
 
     def _cache_key(self, url: str, params: Mapping[str, Any] | None) -> str:
         if not params:
