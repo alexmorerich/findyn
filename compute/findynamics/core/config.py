@@ -28,16 +28,19 @@ CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 SERIES_CONFIG_PATH = CONFIG_DIR / "series.yaml"
 ENGINES_CONFIG_DIR = CONFIG_DIR / "engines"
 
+# Only providers with a working adapter (data/providers/registry.py), plus the
+# two that are never fetched. Naming an unimplemented provider here would defer
+# the failure from config load to the first fetch — a typo should not survive
+# that long. tests/data/test_providers.py asserts this set and the registry's
+# NETWORK_PROVIDERS stay in lock-step.
 VALID_PROVIDERS = frozenset(
     {
         "fred",
         "shiller",
         "bls",
         "bea",
-        "treasury",
-        "alphavantage",
         "stooq",
-        "yahoo",
+        # Computed downstream from other configured series, never fetched.
         "derived",
         # Not an external source: another engine's published output, read back
         # from the serving plane so a consumer never imports the producer
@@ -116,11 +119,11 @@ class SeriesConfig:
         return tuple(name for name in ASSETS if self.is_enabled(name))
 
 
-def _series_from_mapping(raw: Any, where: str, *, default_id: str | None = None) -> SeriesSpec:
+def _series_from_mapping(raw: Any, where: str) -> SeriesSpec:
     if not isinstance(raw, dict):
         raise ConfigError(f"{where}: expected a mapping, got {type(raw).__name__}")
 
-    series_id = raw.get("id", default_id)
+    series_id = raw.get("id")
     if not series_id:
         raise ConfigError(f"{where}: missing 'id'")
 
@@ -190,16 +193,12 @@ def _parse_engine_series(name: str, entry: Any) -> dict[str, SeriesSpec]:
     if not isinstance(series_raw, dict) or not series_raw:
         raise ConfigError(f"engines.{name}.series: expected a non-empty mapping")
 
-    # A role may name a ``symbol`` instead of a full id; the synthesised id keeps
-    # the v1 ``PRICE:<symbol>`` shape so existing macro_series rows still match.
+    # Every series declares its provider-native id explicitly. The v1 config
+    # synthesised ``PRICE:<symbol>`` ids here, but no adapter recognises those:
+    # a synthesised id passed validation and then failed at fetch time, which is
+    # exactly the class of failure this module exists to catch at load.
     return {
-        role: _series_from_mapping(
-            role_entry,
-            f"engines.{name}.series.{role}",
-            default_id=(
-                f"PRICE:{role_entry.get('symbol', role)}" if isinstance(role_entry, dict) else None
-            ),
-        )
+        role: _series_from_mapping(role_entry, f"engines.{name}.series.{role}")
         for role, role_entry in series_raw.items()
     }
 

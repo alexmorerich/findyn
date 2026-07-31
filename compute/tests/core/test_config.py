@@ -31,11 +31,15 @@ def test_no_series_declares_a_negative_publication_lag():
         assert series.publication_lag_days >= 0, series.id
 
 
-def test_equity_price_has_a_primary_and_an_isolated_fallback():
+def test_equity_price_covers_every_horizon_p3_needs():
+    """Daily backbone, a long daily proxy for regime work, and deep history.
+
+    FRED's SP500 window (2016-08+) contains no 2008 and no 2020-scale recovery;
+    the NASDAQ100 proxy (1986+) is what puts crisis regimes in-sample.
+    """
     price = load_series_config().engine_series("equity")
-    assert price["primary"].provider == "alphavantage"
-    # Yahoo stays a fallback only, so it can be deleted without touching callers (§5.1).
-    assert price["fallback"].provider == "yahoo"
+    assert price["primary"].provider == "fred"
+    assert price["regime_proxy"].id == "FRED:NASDAQ100"
     assert price["backfill"].provider == "stooq"
 
 
@@ -45,12 +49,14 @@ def test_deep_history_reaches_1871():
     assert config.history_start.startswith("1871")
 
 
-def test_engine_series_ids_survived_the_move_from_the_price_block():
-    """The v1 `PRICE:<symbol>` ids are what macro_series rows are keyed by."""
+def test_equity_series_ids_are_provider_native():
+    """Jobs pass spec.id straight to the adapter, so the id must be one the
+    adapter recognises. The v1 config synthesised `PRICE:<symbol>` ids that no
+    adapter accepted — valid at load, dead at fetch."""
     price = load_series_config().engine_series("equity")
-    assert price["primary"].id == "PRICE:SPY"
-    assert price["backfill"].id == "PRICE:^spx"
-    assert price["deep_history"].id == "PRICE:deep_history"
+    assert price["primary"].id == "FRED:SP500"
+    assert price["backfill"].id == "STOOQ:^SPX"
+    assert price["deep_history"].id == "SHILLER:NOMINAL_PRICE"
 
 
 def test_only_engines_whose_phase_has_landed_are_enabled():
@@ -106,7 +112,7 @@ meta:
 engines:
   equity:
     series:
-      primary: {{provider: alphavantage, symbol: SPY, frequency: daily, publication_lag_days: 0}}
+      primary: {{id: 'FRED:SP500', provider: fred, frequency: daily, publication_lag_days: 1}}
 factors:
 {MINIMAL_FACTORS}
 """
@@ -141,7 +147,7 @@ def test_negative_lag_is_rejected(tmp_path):
 def test_empty_engine_series_block_is_rejected(tmp_path):
     """An engine that declares `series:` and lists none is a truncated edit."""
     body = VALID.replace(
-        "      primary: {provider: alphavantage, symbol: SPY, frequency: daily, publication_lag_days: 0}",
+        "      primary: {id: 'FRED:SP500', provider: fred, frequency: daily, publication_lag_days: 1}",
         "",
     )
     with pytest.raises(ConfigError, match="engines.equity.series"):

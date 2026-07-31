@@ -248,6 +248,98 @@ class TestFetchAgainstTheCap:
         assert scripted.windows == [(REALTIME_START, REALTIME_END)]
 
 
+NOT_IN_ALFRED = json.dumps(
+    {
+        "error_code": 400,
+        "error_message": (
+            "Bad Request.  The series does not exist in ALFRED but may exist in FRED.  "
+            "Try setting realtime_start and realtime_end to today's date or removing "
+            "the realtime_start and realtime_end variables."
+        ),
+    }
+)
+
+
+class FredOnlySeries:
+    """SP500's real shape, verified live 2026-07-31: the series exists in FRED
+    but not in ALFRED, and any request carrying a real-time window — the
+    vintagedates call included — returns HTTP 400 rather than an empty list."""
+
+    def __init__(self) -> None:
+        self.plain_requests: list[dict] = []
+
+    def __call__(self, url, *, params=None, headers=None, timeout=30.0):
+        params = params or {}
+        if url.endswith("/series"):
+            return ok(json.dumps(METADATA))
+        if url.endswith("/series/vintagedates"):
+            return ok(NOT_IN_ALFRED, status=400)
+        if "realtime_start" in params or "realtime_end" in params:
+            return ok(NOT_IN_ALFRED, status=400)
+        self.plain_requests.append(dict(params))
+        # Without a window FRED stamps every row's realtime_start with today.
+        return ok(
+            json.dumps(
+                {
+                    "observations": [
+                        {"date": "2016-08-01", "realtime_start": "2026-07-31", "value": "2170.84"},
+                        {"date": "2026-07-29", "realtime_start": "2026-07-31", "value": "6362.90"},
+                    ]
+                }
+            )
+        )
+
+
+class TestFredOnlySeries:
+    """REGRESSION — a FRED-only series must degrade to a plain fetch, not 400."""
+
+    def test_vintage_dates_reports_no_archive_rather_than_raising(self):
+        assert build(FredOnlySeries()).vintage_dates("FRED:SP500") is None
+
+    def test_fetch_falls_back_to_a_single_plain_request(self):
+        scripted = FredOnlySeries()
+
+        rows = build(scripted).fetch_observations("FRED:SP500")
+
+        assert len(rows) == 2
+        assert len(scripted.plain_requests) == 1
+
+    def test_the_bulk_stamp_survives_for_the_repair_layer_to_see(self):
+        """Every row carries today's stamp — the bulk-seeding tell that
+        data/vintages.py replaces with the configured publication lag. The
+        adapter must not paper over it, or the repair never triggers."""
+        rows = build(FredOnlySeries()).fetch_observations("FRED:SP500")
+
+        assert {r.release_date for r in rows} == {date(2026, 7, 31)}
+
+    def test_the_repair_layer_then_synthesizes_usable_release_dates(self):
+        from findynamics.core.config import SeriesSpec
+        from findynamics.data.vintages import repair_pre_archive_releases
+
+        rows = build(FredOnlySeries()).fetch_observations("FRED:SP500")
+        spec = SeriesSpec(
+            id="FRED:SP500", provider="fred", frequency="daily", publication_lag_days=1
+        )
+
+        repaired = repair_pre_archive_releases(rows, spec)
+
+        by_obs = {r.observation_date: r.release_date for r in repaired}
+        # A 2016 close becomes knowable the next day, not in 2026.
+        assert by_obs[date(2016, 8, 1)] == date(2016, 8, 2)
+
+    def test_a_genuinely_malformed_request_still_raises(self):
+        """Only the vintagedates 400 means "no archive"; a 400 from the plain
+        observations call is a real error and must surface."""
+
+        def broken(url, *, params=None, headers=None, timeout=30.0):
+            if url.endswith("/series"):
+                return ok(json.dumps(METADATA))
+            return ok(NOT_IN_ALFRED, status=400)
+
+        with pytest.raises(ProviderError, match="400"):
+            build(broken).fetch_observations("FRED:SP500")
+
+
 class TestDedupeVintages:
     """Splitting clamps each chunk's realtime_start to its boundary, so an
     unchanged figure reappears looking like a fresh issue. Left in, the vintage

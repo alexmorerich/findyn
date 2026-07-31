@@ -368,7 +368,7 @@ npx wrangler login
 # paste the ids into wrangler.jsonc, then:
 npm run types                 # regenerate binding types
 npm run db:migrate:remote
-npx wrangler secret put FRED_API_KEY      # and BLS / BEA / ALPHAVANTAGE
+npx wrangler secret put FRED_API_KEY      # and BLS / BEA
 npx wrangler secret put ADMIN_HMAC_SECRET # openssl rand -hex 32
 npm run deploy
 ```

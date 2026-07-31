@@ -1,0 +1,133 @@
+name: Compute — backfill
+
+# One-off historical ingestion (FINDYN_V1_SPEC.md §6, M1-A). Manual only: a
+# backfill is a deliberate act, not a heartbeat.
+#
+# It also exists to answer a question local runs cannot. Stooq fronts its CSV
+# endpoint with a JavaScript proof-of-work challenge, but applies it per-egress
+# (compute/findynamics/data/providers/stooq.py) — from a developer network it
+# returns the interstitial, from GitHub's runners it may return the CSV. Stooq
+# is the only free source of daily S&P history before 2016, so whether it
+# answers from here decides how deep FinEquity's daily backbone can go.
+#
+# The payload is uploaded as an artifact on every outcome, including a dry run
+# and a failed write-back. That is the point: the pre-2016 history never
+# changes, so one successful fetch is worth banking permanently — the filter
+# reaching GitHub's ranges later would not cost us data we already hold.
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "Provider id (stooq, fred, shiller, bls, bea)"
+        required: true
+        default: "stooq"
+      series:
+        description: "Series ids, space-separated. Blank = every series series.yaml maps to this provider."
+        required: false
+      start:
+        description: "Earliest observation date (YYYY-MM-DD). Blank = the series' own start."
+        required: false
+      end:
+        description: "Latest observation date (YYYY-MM-DD). Blank = today."
+        required: false
+      dry_run:
+        description: "Fetch and validate without writing to D1. The artifact is produced either way."
+        type: boolean
+        default: true
+      force:
+        description: "Write series even when the quality engine reports errors"
+        type: boolean
+        default: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: compute
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: compute/pyproject.toml
+      - run: pip install -e .
+
+      # Inputs travel through env rather than ${{ }} interpolation so they are
+      # shell values, not shell source — and so `^SPX` survives unmangled.
+      - name: Fetch and validate
+        id: fetch
+        env:
+          FINDYN_ADMIN_URL: ${{ secrets.FINDYN_ADMIN_URL }}
+          ADMIN_HMAC_SECRET: ${{ secrets.ADMIN_HMAC_SECRET }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          BLS_API_KEY: ${{ secrets.BLS_API_KEY }}
+          BEA_API_KEY: ${{ secrets.BEA_API_KEY }}
+          PROVIDER: ${{ inputs.provider }}
+          SERIES: ${{ inputs.series }}
+          START: ${{ inputs.start }}
+          END: ${{ inputs.end }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          ARGS=(--provider "$PROVIDER" --out backfill-payload.json --verbose)
+          # `if` rather than `[ ... ] && ...`: the step runs under `bash -e`,
+          # where a trailing test that evaluates false would fail the step.
+          # Deliberately unquoted below: --series takes nargs="*", so a
+          # multi-series request must word-split into separate arguments.
+          if [ -n "$SERIES" ]; then ARGS+=(--series $SERIES); fi
+          if [ -n "$START" ]; then ARGS+=(--start "$START"); fi
+          if [ -n "$END" ]; then ARGS+=(--end "$END"); fi
+          if [ "$DRY_RUN" = "true" ]; then ARGS+=(--dry-run); fi
+          if [ "$FORCE" = "true" ]; then ARGS+=(--force); fi
+          python -m jobs.backfill "${ARGS[@]}"
+
+      # always(): a bot challenge exits non-zero, and its payload — carrying the
+      # per-series error — is exactly what we want to read afterwards.
+      - name: Bank the payload
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: backfill-${{ inputs.provider }}
+          path: compute/backfill-payload.json
+          if-no-files-found: warn
+          retention-days: 400
+
+      - name: Summarise the outcome
+        if: always()
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os, pathlib
+
+          path = pathlib.Path("backfill-payload.json")
+          if not path.exists():
+              print("No payload was written — the job failed before fetching.")
+              raise SystemExit(0)
+
+          payload = json.loads(path.read_text())
+          rows = payload.get("observations") or []
+          dates = [r["obs_date"] for r in rows]
+
+          print("| series | status | rows | detail |")
+          print("|---|---|---|---|")
+          for entry in payload.get("ingestion") or []:
+              detail = entry.get("error") or ""
+              if "proof-of-work" in detail or "bot-filtered" in detail:
+                  detail = "**bot challenge — this egress is filtered too**"
+              print(
+                  f"| `{entry['series_id']}` | {entry['status']} "
+                  f"| {entry['rows_written']:,} | {detail} |"
+              )
+
+          if dates:
+              print(f"\n**{len(rows):,} observations, {min(dates)} → {max(dates)}.**")
+              if os.environ.get("DRY_RUN") == "true":
+                  print(
+                      "\nDry run: nothing was written to D1. The data is in the "
+                      "artifact above — re-run with `dry_run: false` to store it."
+                  )
+          PY
