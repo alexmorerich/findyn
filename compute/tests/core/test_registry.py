@@ -68,7 +68,18 @@ def pit_accessor():
 def make_engine(
     name: str, version: str = "0.1.0", *, experimental: bool = False
 ) -> type[AssetEngine]:
-    """A minimal concrete engine — the smallest thing the ABC accepts."""
+    """A minimal concrete engine — the smallest thing the ABC accepts.
+
+    It takes ``(config, artifacts)`` because that is the constructor the registry
+    builds every engine with (``03-contracts.md`` §3): one uniform signature is
+    what lets ``enabled_engines`` hand the whole run the same artifact store
+    without knowing which engines exist. A fake that took no arguments would
+    pass while asserting a contract the real engines do not share.
+    """
+
+    def construct(self, config=None, artifacts=None) -> None:
+        self.config = config
+        self.artifacts = artifacts
 
     def predict(self, world: WorldState) -> AssetState:
         return AssetState(
@@ -89,6 +100,7 @@ def make_engine(
             "name": name,
             "version": version,
             "experimental": experimental,
+            "__init__": construct,
             "required_series": lambda self: (),
             "fit": lambda self, world: None,
             "predict": predict,

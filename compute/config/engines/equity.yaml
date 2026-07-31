@@ -58,7 +58,12 @@ features:
 # evidence.
 regime:
   # Windows for the dimensionless design matrix, in the units named.
-  trend_months: 3.0
+  # Two trend horizons, because a fast crash and a slow bear are different
+  # events and one window cannot see both: a quarter sees 1987 and 2020, a year
+  # sees 2000 and 2008. Neither is the Kalman slope — see regime/design.py for
+  # why the obvious choice put a rising market at all-time highs into `bear`.
+  trend_fast_months: 3.0
+  trend_slow_months: 12.0
   vol_months: 1.0
   vol_baseline_years: 3.0
   drawdown_years: 1.0

@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
-import hmac
 import json
 import logging
 import os
-import time
 from collections.abc import Iterator
 from typing import Any
 
 import httpx
+
+from findynamics.core.signing import sign
 
 LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
 
@@ -40,14 +39,9 @@ def base_parser(description: str) -> argparse.ArgumentParser:
     return parser
 
 
-def sign_payload(secret: str, body: str, timestamp: int | None = None) -> tuple[str, str]:
-    """Return (timestamp, hex signature) over ``{timestamp}.{body}``.
-
-    Must stay byte-identical to serving/src/admin/hmac.ts::verifyHmac.
-    """
-    ts = str(timestamp if timestamp is not None else int(time.time()))
-    mac = hmac.new(secret.encode(), f"{ts}.{body}".encode(), hashlib.sha256)
-    return ts, mac.hexdigest()
+#: Re-exported from core so the write-back and the artifact client cannot drift
+#: apart. Must stay byte-identical to serving/src/admin/hmac.ts::verifyHmac.
+sign_payload = sign
 
 
 def write_back(payload: dict[str, Any], *, dry_run: bool = False) -> None:

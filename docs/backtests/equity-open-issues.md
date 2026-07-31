@@ -74,54 +74,77 @@ multi-output calibration, would.
 
 ---
 
-## 3b. The regime feature set is not settled — this is the biggest open item
+## 3b. RESOLVED — the regime feature set
 
-**Status:** one bug fixed, a regression introduced, neither finished.
+**Status:** fixed. Kept for the record because the failure is instructive and the
+trade-off it settled is still live.
 
-`trend_to_noise` originally divided the **Kalman slope** by realized volatility.
-The local-linear-trend MLE drives `sigma2_trend` to ~1e-12 on every price series
-— an index is close to a random walk, so the likelihood is flat in that
-parameter — and the resulting slope barely moves: standard deviation 0.05
-against 0.28 for a plain trailing return, correlated only 0.47 with it.
+`trend_to_noise` divided the **Kalman slope** by realized volatility. The
+local-linear-trend MLE drives `sigma2_trend` to ~1e-12 on every price series — an
+index is close to a random walk, so the likelihood is flat in that parameter —
+and the fitted slope barely moved: standard deviation 0.05 against 0.28 for a
+plain trailing return, correlated only 0.47 with it.
 
-Dividing a near-constant numerator by volatility does not give a trend-to-noise
-ratio. It gives an **inverse-volatility feature wearing a trend's name**, and the
-consequence was visible and indefensible: the lowest-volatility state had the
-highest `trend_to_noise`, so the labelling rule called it the most bullish, and a
-quiet rising market at all-time highs was published as **`bear` with 97%
-confidence**.
+That is not a trend-to-noise ratio. It is an inverse-volatility feature wearing a
+trend's name, and it reached production: the lowest-volatility state carried the
+highest value, the labelling rule called it the most bullish, and a quiet rising
+market at all-time highs was published as **`bear` at 97% confidence**.
 
-The numerator is now a trailing 3-month annualized return. Today's state becomes
-`normal_expansion`, which is right, and the states are monotone in return with
-`bull_expansion` at +34.3%/10.7% and `crisis` at −13.3%/23.2%.
+The first repair — a single trailing 3-month return — fixed today's label and
+broke 1987 (29% coverage) and the cross-index transfer. The settled answer is
+**two horizons**, `trend_fast` (3 months) and `trend_slow` (12 months), because a
+fast crash and a slow bear are different events and one window cannot see both.
 
-**But in-sample episode coverage regressed badly.** Share of each episode called
-bear-or-crisis, on the 1927+ S&P:
+What changed, measured out of sample on the 1927+ S&P:
 
-| Episode | Coverage |
-|---|---:|
-| 1929 | 16% |
-| 1931 | 76% |
-| 1974 | 86% |
-| 1987 | 18% |
-| 2000 | 79% |
-| 2008 | **22%** |
-| 2020 | 23% |
-| 2022 | 39% |
+| | before | after |
+|---|---:|---:|
+| 2020 COVID coverage | **0%** | **70.8%** |
+| 2008 GFC coverage | 68.0% | 74.7% |
+| 2000 dot-com coverage | 59.1% | 59.4% |
+| 2022 coverage | 67.3% | 27.6% |
+| deep-history episodes reaching bear/crisis | 1 of 4 | **4 of 4** |
+| live label at all-time highs | `bear` (0.97) | `normal_expansion` (0.83) |
 
-2008 at 22% is far worse than the 100% the earlier NASDAQ-fitted configuration
-achieved, and 2023 — a recovery year — shows 55%.
+The deep-history cross-check — the stated gate for sub-milestone C — is now
+green: 2008 goes 0% → 70.6%, 2020 0% → 100%, 2022 0% → 44.4% on the real S&P
+composite.
 
-So the current state is: the *live* label is sensible and the *historical*
-behaviour is not. The committed backtest report predates this change and
-describes the earlier configuration.
+**The trade-off that remains.** 2022 fell from 67.3% to 27.6% bear-or-crisis
+coverage, though it still reaches `late_cycle` or worse for 86.7% of the episode.
+2022 was a slow grind with no single violent leg, which is the case a fast
+horizon does not help with and a 12-month horizon reads as merely weak.
 
-**This needs to be settled before sub-milestone C.** The RII and the crash
-decomposition both consume the regime posterior, and building them on a feature
-set this unstable would bake the problem into three more published numbers.
-Likely direction: the single 3-month trend window is too long for 1987/2020 and
-too short for 1931/1974, so a multi-horizon trend feature, or separating the
-"fast crash" and "slow bear" discriminators, is the obvious next thing to try.
+**The method changed too, and that matters more than the answer.** The first two
+attempts each fixed one criterion and broke another that was only discovered
+afterwards. The fix came from scoring candidates against *every* criterion at
+once — transfer, all eight historical episodes, calm-year false alarms, state
+structure, persistence and the live label — before changing anything. Any future
+change to this feature set should be made the same way.
+
+---
+
+## 3c. The transition classifier got worse, not better
+
+**Status:** open, and now the largest problem in the L3 layer.
+
+The new feature set produces more regime changes, so adverse *entries* are more
+frequent and the base rates climbed hard:
+
+| Horizon | base rate before | base rate after | Brier skill after |
+|---|---:|---:|---:|
+| 3m | 24.3% | 49.3% | −13.8% |
+| 6m | 43.4% | 77.2% | −39.8% |
+| 12m | 68.1% | **95.1%** | −109.2% |
+
+A 12-month transition probability against a 95% base rate carries almost no
+information — the live state publishes 0.9951 for it. The direction flags handle
+this correctly (6m and 12m read neutral rather than adverse, because they are at
+their base rates), but the numbers should not be given prominence on a dashboard
+until the adverse event is redefined, which is issue #1.
+
+This strengthens rather than changes the conclusion of issue #2: **nothing should
+be built on the transition probabilities as though they carried skill.**
 
 ---
 
@@ -236,6 +259,38 @@ the engine docstring and in this list.
 It is the posterior-weighted mean return of the fitted states, annualized — what
 the fitted model implies about *now*, not the §10 Monte Carlo distribution
 median. It also inherits the calibration series' realized returns.
+
+---
+
+## 11. RESOLVED — fitted models were stored in an ephemeral directory
+
+**Status:** fixed. Recorded because it was a production blocker that no test
+would ever have caught.
+
+`AssetEngine.fit` runs monthly and `predict` runs daily, in *different* GitHub
+Actions containers. Artifacts were written to `compute/artifacts/`, which is
+gitignored and destroyed with the runner — so the daily job never once saw what
+the refit fitted. Since the equity engine's correct response to a missing fit is
+to publish no state, a scheduled production run would have published nothing,
+forever, without erroring.
+
+Fitted models now live in R2 behind the serving plane's existing HMAC door
+(§6), with three properties:
+
+- **Immutable.** A version is written once. Re-writing identical bytes is a
+  no-op (retries are routine); re-writing *different* bytes under the same
+  version is a 409. Without that, a published `model_version` is a claim nobody
+  can check.
+- **Addressed by `model_version`.** The key is `artifacts/<name>/<version>.json`,
+  so "load the model that produced this state" is a lookup. `FINDYN_MODEL_VERSION`
+  pins a run to an exact version for replay; a daily run follows `latest`.
+- **Chosen by environment, not by flag.** `build_artifact_store()` returns R2
+  when the serving plane is configured and the local directory otherwise, so
+  there is no argument anyone can forget that would let an ephemeral artifact
+  reach production.
+
+Verified by deleting `compute/artifacts/` entirely and running the daily job: it
+loaded `equity-1.0.0+cal.yahoo_gspc` from R2 and published a state.
 
 ---
 

@@ -66,9 +66,17 @@ def engine_class(name: str) -> type[AssetEngine]:
         raise RegistryError(f"unknown engine {name!r}; registered: {sorted(ENGINES)}") from None
 
 
-def get_engine(name: str) -> AssetEngine:
-    """Instantiate the engine registered under ``name``."""
-    return engine_class(name)()
+def get_engine(name: str, *, config: object = None, artifacts: object = None) -> AssetEngine:
+    """Instantiate the engine registered under ``name``.
+
+    ``config`` and ``artifacts`` are passed through when given. Every engine
+    takes the same two constructor arguments precisely so the registry can build
+    any of them without knowing which — see ``03-contracts.md`` §3.
+    """
+    cls = engine_class(name)
+    if config is None and artifacts is None:
+        return cls()
+    return cls(config, artifacts)  # type: ignore[call-arg]
 
 
 def registered_engines() -> tuple[str, ...]:
@@ -76,12 +84,15 @@ def registered_engines() -> tuple[str, ...]:
     return tuple(name for name in ASSETS if name in ENGINES)
 
 
-def enabled_engines(config: SeriesConfig) -> list[AssetEngine]:
+def enabled_engines(config: SeriesConfig, *, artifacts: object = None) -> list[AssetEngine]:
     """Instances of every engine that is both registered and enabled in config.
 
     An engine enabled in config but not registered is a configuration error, not
     a silent no-op: it means the operator asked for a model that the deployed
     code cannot produce.
+
+    ``artifacts`` is handed to every engine so one run cannot have some engines
+    reading fitted models from R2 and others from an ephemeral local directory.
     """
     engines: list[AssetEngine] = []
     for name in config.enabled_engine_names():
@@ -89,7 +100,7 @@ def enabled_engines(config: SeriesConfig) -> list[AssetEngine]:
             raise RegistryError(
                 f"engine {name!r} is enabled in config but no implementation is registered"
             )
-        engines.append(get_engine(name))
+        engines.append(get_engine(name, config=config, artifacts=artifacts))
     return engines
 
 

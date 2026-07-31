@@ -21,6 +21,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
+from findynamics.core.artifacts import build_artifact_store
 from findynamics.core.config import SeriesConfig, load_series_config
 from findynamics.core.contracts.state import (
     AssetState,
@@ -72,7 +73,11 @@ def build_world(
     file knowing what they are.
     """
     load_engines(config)
-    engines = enabled_engines(config)
+    # Artifact storage is chosen from the environment, not by the job: a run with
+    # the serving plane configured reads its fitted models out of R2, and a
+    # developer run with no secrets reads the local directory. Handing it in here
+    # is what stops an engine defaulting to ephemeral local storage in CI.
+    engines = enabled_engines(config, artifacts=build_artifact_store())
 
     engine_series = {series_id for engine in engines for series_id in engine.required_series()}
     wanted = required_series_ids(config, engine_series)

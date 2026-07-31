@@ -589,8 +589,15 @@ def cross_check_deep_history(
         "span": [walk.span[0].isoformat(), walk.span[1].isoformat()],
         "episodes": [r.as_dict() for r in results],
         "flagged": sorted(r.episode.name for r in results if r.coverage > 0.25),
-        "deteriorated": sorted(r.episode.name for r in results if r.deteriorated_coverage > 0.5),
-        "missed": sorted(r.episode.name for r in results if r.deteriorated_coverage <= 0.5),
+        "deteriorated": sorted(
+            r.episode.name for r in results if r.deteriorated_coverage > 0.5 and r.coverage <= 0.25
+        ),
+        # An episode that reached bear/crisis cannot also be "missed" — the
+        # first version of this compared only against the looser threshold and
+        # listed 2000 as missed while also listing it as called.
+        "missed": sorted(
+            r.episode.name for r in results if r.coverage <= 0.25 and r.deteriorated_coverage <= 0.5
+        ),
     }
 
 
