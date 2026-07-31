@@ -1371,3 +1371,14 @@ a.enginecard__title {
 .bandrow--educational {
   opacity: 0.72;
 }
+
+/* The §12 sentence. Slightly larger than body copy because it is the one line
+ * on the page that states a consequence, and slightly indented because it is
+ * conditional on the clauses above it rather than a conclusion from them. */
+.prose--lead {
+  font-size: 1.02rem;
+  color: var(--fg);
+  border-left: 3px solid var(--accent);
+  padding-left: 0.85rem;
+  margin-top: 0.9rem;
+}

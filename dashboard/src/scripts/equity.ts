@@ -105,6 +105,7 @@ const hosts = {
   range: host('range'),
   instability: host('instability'),
   crash: host('crash'),
+  implication: host('implication'),
   forecast: host('forecast'),
   state: host('state'),
   regime: host('regime'),
@@ -940,6 +941,83 @@ function factorBar(label: string, value: number, detail: string): HTMLElement {
 }
 
 /**
+ * §12 — the conditional implication, templated from the published numbers.
+ *
+ * §0's non-goal 2 is "no trading commands", and this is the sentence that has to
+ * respect it while still being useful. Three rules hold it in place:
+ *
+ * - It is **conditional**, not imperative. "Investors with a short horizon may
+ *   consider" is a statement about a class of constraint; "reduce equity" is an
+ *   instruction to the reader, whose constraints this system does not know.
+ * - It is **assembled from the published numbers**, in the browser, from the
+ *   same fields shown above it. There is no hidden model behind the sentence and
+ *   nothing it says cannot be checked against the panels.
+ * - It **says what it does not know**. Tax jurisdiction, horizon, liabilities and
+ *   risk tolerance are exactly what turns a distribution into a decision, and
+ *   none of them are inputs here.
+ */
+function renderImplication(state: ApiResult<AssetState>, instability: ApiResult<InstabilityHistory>): void {
+  if (!hosts.implication) return;
+  if (!state.ok) {
+    replace(hosts.implication, failureBlock(state, 'Conditional implication'));
+    return;
+  }
+
+  const data = state.envelope.data;
+  const components = data.components ?? {};
+  const signal = (name: string) => data.signals.find((s) => s.name === name)?.value;
+  const latest = instability.ok
+    ? instability.envelope.data.points.filter((p) => p.rii !== null).at(-1)
+    : undefined;
+
+  const regime = data.regime?.replace(/_/g, ' ') ?? 'an unpublished regime';
+  const rii = latest?.rii ?? null;
+  const transmission = signal('p_transmission') ?? components.p_transmission;
+
+  const clauses: string[] = [
+    `The model reads the current state as ${regime}` +
+      (data.confidence == null
+        ? '.'
+        : ` at ${Math.round(data.confidence * 100)}% posterior probability.`),
+  ];
+
+  if (rii !== null) {
+    clauses.push(
+      rii >= RII_HIGH
+        ? `Regime instability is in the top of its historical range (${formatValue(rii)}/100), which is a statement about how close the system is to a state transition — in either direction.`
+        : rii >= RII_ELEVATED
+          ? `Regime instability is elevated (${formatValue(rii)}/100) but not extreme.`
+          : `Regime instability is unremarkable against this series' own history (${formatValue(rii)}/100).`,
+    );
+  }
+
+  if (transmission !== undefined && Number.isFinite(transmission)) {
+    clauses.push(
+      transmission >= 0.5
+        ? 'Credit and liquidity conditions are such that a shock would propagate rather than be absorbed.'
+        : 'Credit and liquidity conditions currently look absorptive rather than transmissive, which lowers the composite without lowering the probability of a shock arriving.',
+    );
+  }
+
+  const implication =
+    rii !== null && rii >= RII_ELEVATED
+      ? 'Under this distribution, investors whose horizon is short enough that a multi-year drawdown could not be waited out may consider whether their equity concentration and liquidity match that constraint.'
+      : 'Under this distribution, nothing in the published state distinguishes now from an ordinary period for an investor whose horizon spans the forecast horizons above.';
+
+  replace(
+    hosts.implication,
+    el('p', { class: 'prose' }, clauses.join(' ')),
+    el('p', { class: 'prose prose--lead' }, implication),
+    stateBlock({
+      tone: 'info',
+      title: 'What this sentence cannot know',
+      detail:
+        'Horizon, tax jurisdiction, liabilities and risk tolerance are what turn a distribution into a decision, and none of them are inputs to this system. That is why the sentence is conditional on a constraint rather than addressed to you, and why no endpoint anywhere in this API returns an action.',
+    }),
+  );
+}
+
+/**
  * §11 — the Monte Carlo distribution as a fan, with the educational horizons
  * held apart.
  *
@@ -1462,6 +1540,7 @@ async function load(range: RangeSpec): Promise<void> {
   renderInstability(instability, state);
   renderCrash(state);
   renderForecast(forecast);
+  renderImplication(state, instability);
   renderPrice(close ?? regimePlaceholder(), filtered ?? regimePlaceholder(), deep, range);
   renderKinematics(velocity ?? regimePlaceholder(), acceleration ?? regimePlaceholder(), range);
   renderJerk(jerk ?? regimePlaceholder(), range);
