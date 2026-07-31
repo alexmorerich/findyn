@@ -97,3 +97,24 @@ outputs:
   # `/equity` can chart it. Running this nightly is the mistake the split
   # exists to prevent.
   backfill_history_days: 40000
+
+# §3.2 / §4 — the instability index and the crash decomposition.
+instability:
+  # Peaks-over-threshold cut for the 1871+ tail. Deep enough to be a real
+  # drawdown, shallow enough that a century of monthly data holds ~46 episodes.
+  tail_threshold: 0.10
+  # Horizon the published crash decomposition is quoted over.
+  crash_horizon_months: 12
+  # Component weights (§3.2 default: equal). Read the open-issues note before
+  # tuning these — as specified, three of the seven components move against the
+  # other four during a crisis, so reweighting changes what the index measures
+  # rather than merely how loudly it says it.
+  # weights: {posterior_entropy: 1.0, ...}
+
+# §11 — the Monte Carlo.
+simulate:
+  # Paths per horizon. The spec's floor is 10,000; set to 0 to skip the
+  # simulation entirely, which is how a replay across many cutoffs avoids
+  # paying for it.
+  paths: 10000
+  seed: 20260731

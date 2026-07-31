@@ -25,20 +25,10 @@ describe('public API (FINDYN_V1_SPEC.md §13)', () => {
     expect(body.data.ok).toBe(true);
   });
 
-  // Still reserved. /state and /forces moved off this list in P3-A and /regime
-  // in P3-B, as each gained something true to say.
-  it.each(['instability', 'forecast', 'simulate'])(
-    'reserves /api/v1/%s with an explicit 501 and its milestone',
-    async (route) => {
-      const res = await SELF.fetch(`https://findyn.test/api/v1/${route}`);
-      expect(res.status).toBe(501);
-      const body = (await res.json()) as { error: string; milestone: string };
-      expect(body.error).toBe('not_implemented');
-      expect(body.milestone).toMatch(/^M[0-9]$/);
-    },
-  );
-
-  it.each(['state', 'forces', 'regime'])(
+  // Nothing is reserved any more. /state and /forces went live in P3-A,
+  // /regime in P3-B, and /instability, /forecast and /simulate in P3-C — every
+  // endpoint FINDYN_V1_SPEC.md §13 names now answers.
+  it.each(['state', 'forces', 'regime', 'instability', 'forecast', 'simulate'])(
     'serves /api/v1/%s on an empty database rather than erroring',
     async (route) => {
       // The endpoints are live from P3-A, but a fresh database has no features

@@ -40,13 +40,17 @@ from findynamics.core.contracts.state import (
     AssetState,
     DerivedFeature,
     EngineOutput,
+    ForecastQuantile,
     RegimeProbability,
     Signal,
     WorldState,
 )
 from findynamics.core.engine import AssetEngine, StateUnavailable
 from findynamics.core.registry import register_engine
+from findynamics.engines.equity import crash as crash_mod
 from findynamics.engines.equity import prices as prices_mod
+from findynamics.engines.equity import rii as rii_mod
+from findynamics.engines.equity import simulate as simulate_mod
 from findynamics.engines.equity.domain import (
     CHART_METRICS,
     KINEMATIC_FEATURES,
@@ -78,11 +82,21 @@ MODEL_VERSION_BASE = "equity-1.0.0"
 #: Artifact document name under ``compute/artifacts/``.
 ARTIFACT_NAME = "equity"
 
-#: Roles the daily run computes features for. Only the publication path is
-#: needed to publish today's features, and the calibration path is 12k
-#: observations of Kalman MLE — real money on a run that will not use it.
-#: ``fit`` and the sub-milestone B backtest ask for the others explicitly.
-DAILY_ROLES: tuple[str, ...] = ("publication",)
+#: Roles the daily run computes features for.
+#:
+#: Calibration is included because M4 needs it, not for the regime model — the
+#: fitted parameters come out of the artifact — but for the RII. Every RII
+#: component is an expanding percentile, and a percentile taken over the
+#: publication window alone is a percentile over eight years: measured that way
+#: the index separated the COVID crash from a calm 2021 by six points out of a
+#: hundred. Over the 1927+ path the same components have a century to rank
+#: against.
+#:
+#: The cost is bounded by the frozen parameters: with ``d`` and the Kalman
+#: variances read from the refit, the calibration path is one filter pass rather
+#: than an MLE, which is seconds rather than minutes. ``deep_history`` stays out
+#: of the daily run — only ``fit`` and the tail estimate need it.
+DAILY_ROLES: tuple[str, ...] = ("publication", "calibration")
 
 #: Every role the pipeline is fitted over.
 ALL_ROLES: tuple[str, ...] = ("publication", "calibration", "deep_history")
@@ -149,6 +163,31 @@ class RegimeView:
 
 
 @dataclass(frozen=True)
+class InstabilityView:
+    """§3.2 and §4: the instability index and the crash decomposition."""
+
+    rii: rii_mod.RiiResult
+    #: Per-date p_transition / p_shock / p_transmission / crash_risk.
+    crash: pd.DataFrame
+    #: Today's decomposition per published horizon.
+    factors: dict[int, crash_mod.CrashFactors]
+    tail: crash_mod.TailFit | None
+    #: ``None`` when the Monte Carlo was not run for this call.
+    simulation: simulate_mod.SimulationResult | None = None
+    #: The RII before it was sliced to the published dates — i.e. over the whole
+    #: calibration record. Not published: `rii` is what the engine speaks about.
+    #: Kept because every diagnostic question about the index ("does it separate
+    #: 2008 from 1995") is a question about a century, and the published slice is
+    #: ten years long. Answering it on the published slice would have graded the
+    #: index on two episodes and one calm year.
+    rii_source: rii_mod.RiiResult | None = None
+
+    @property
+    def latest_rii(self) -> float | None:
+        return self.rii.latest
+
+
+@dataclass(frozen=True)
 class EquityAnalysis:
     """Everything one run derives from the information set, computed once."""
 
@@ -158,6 +197,10 @@ class EquityAnalysis:
     model_version: str
     #: ``None`` when no fitted regime model is in the artifact store yet.
     regime: RegimeView | None = None
+    #: ``None`` until the regime model exists — everything in M4 is downstream
+    #: of the posterior, which is the constraint the whole sub-milestone is
+    #: built under.
+    instability: InstabilityView | None = None
 
     @property
     def publication(self) -> FeatureSet:
@@ -298,12 +341,17 @@ class EquityEngine(AssetEngine):
                 f"backfill {resolved.publication.series_id} before running the engine"
             )
 
+        regime = self._regime_view(features["publication"]) if "publication" in features else None
+
         return EquityAnalysis(
             roles=resolved,
             features=features,
             model_version=self.model_version(resolved),
-            regime=(
-                self._regime_view(features["publication"]) if "publication" in features else None
+            regime=regime,
+            instability=(
+                self._instability_view(world, resolved, features, regime)
+                if regime is not None and "publication" in features
+                else None
             ),
         )
 
@@ -356,6 +404,197 @@ class EquityEngine(AssetEngine):
             contributions=contributions,
             models=models,
         )
+
+    def _macro(self, world: WorldState, role: str) -> pd.Series | None:
+        """One configured macro input, read through the point-in-time gateway.
+
+        ``None`` rather than an exception when the series is absent: the RII and
+        the transmission score are both built to run on fewer inputs and to say
+        which ones they had.
+        """
+        spec = prices_mod.configured_roles(self._config).get(role)
+        if spec is None:
+            return None
+        frame = world.series.wide([spec.id])
+        if frame.empty or spec.id not in frame.columns:
+            return None
+        series = frame[spec.id].dropna()
+        return series if not series.empty else None
+
+    def _instability_view(
+        self,
+        world: WorldState,
+        roles: PriceRoles,
+        features: dict[str, FeatureSet],
+        regime: RegimeView,
+    ) -> InstabilityView | None:
+        """§3.2 and §4, built on the posterior and nothing that claims skill."""
+        publication = features["publication"]
+        block = self._block("instability")
+
+        # The RII is computed on the CALIBRATION path and then sliced to the
+        # publication dates. Every component is an expanding percentile, and a
+        # percentile over the publication window alone is a percentile over
+        # eight years: measured that way the index separated the COVID crash
+        # from a calm 2021 by six points on a hundred-point scale, because
+        # `jerk` had not finished warming up, `vol_of_vol` was ranked against a
+        # sample containing only one crash, and half the components were NaN.
+        #
+        # Calibration is the same index as publication (see prices.py:
+        # SAME_INDEX_ROLES), so this is a longer view of the same market rather
+        # than a different one — the transfer question does not arise.
+        source = features.get("calibration", publication)
+        design = self._design(source)
+        source_posteriors = (
+            regime.posteriors if source is publication else regime.model.posteriors(design)
+        )
+
+        credit = self._macro(world, "credit_spread")
+        liquidity = self._macro(world, "liquidity_stress")
+        bonds = self._macro(world, "bond_yield")
+        curve = self._macro(world, "curve_slope")
+
+        try:
+            index = rii_mod.compute_rii(
+                source_posteriors,
+                jerk_z=source.frame.get("jerk_z"),
+                realized_vol=design.realized_vol,
+                equity_returns=source.log_price.diff(),
+                bond_yield=bonds,
+                credit_spread=credit,
+                liquidity=liquidity,
+                periods_per_year=source.series.periods_per_year,
+                weights=block.get("weights"),
+            )
+        except ValueError as err:
+            log.warning("equity: no RII (%s)", err)
+            return None
+
+        # Published on the dates the engine speaks about, computed on the dates
+        # that make the percentiles mean something. Both are kept: the long one
+        # is what any diagnostic has to be measured against.
+        source_index = index
+        index = rii_mod.RiiResult(
+            index=index.index.reindex(regime.posteriors.index).ffill(),
+            components={
+                name: series.reindex(regime.posteriors.index).ffill()
+                for name, series in index.components.items()
+            },
+            weights=index.weights,
+            missing=index.missing,
+        )
+
+        # The 1871+ tail. Deep history is the only admissible basis (§4) and it
+        # is monthly, which is why the conversion is explicit in crash.py.
+        tail: crash_mod.TailFit | None = None
+        deep = features.get("deep_history")
+        if deep is not None:
+            try:
+                tail = crash_mod.fit_tail(
+                    deep.log_price,
+                    periods_per_year=deep.series.periods_per_year,
+                    series_id=deep.series.series_id,
+                    threshold=float(block.get("tail_threshold", crash_mod.DEFAULT_THRESHOLD)),
+                )
+            except crash_mod.TailFitError as err:
+                log.warning("equity: no tail fit (%s); p_shock falls back to a base rate", err)
+
+        labels = regime.model.fit.labels
+        adverse = [i for i, label in enumerate(labels) if label in crash_mod.ADVERSE]
+        transmat = np.asarray(regime.model.fit.transmat, dtype=float)
+        periods = publication.series.periods_per_year
+
+        credit_velocity = None if credit is None else credit.diff(21).abs()
+
+        horizon = float(block.get("crash_horizon_months", 12))
+        history = crash_mod.crash_history(
+            regime.posteriors,
+            transmat=transmat,
+            adverse_states=adverse,
+            periods_per_year=periods,
+            horizon_months=horizon,
+            tail=tail,
+            rii=index.index,
+            credit_spread=credit,
+            credit_velocity=credit_velocity,
+            liquidity=liquidity,
+            curve_slope=curve,
+        )
+
+        latest_posterior = np.array(
+            [float(regime.latest.get(label, 0.0)) for label in labels], dtype=float
+        )
+        factors = {
+            int(months): crash_mod.crash_factors(
+                posterior=latest_posterior,
+                transmat=transmat,
+                adverse_states=adverse,
+                periods_per_year=periods,
+                tail=tail,
+                rii=index.latest,
+                horizon_months=float(months),
+                credit_spread=None if credit is None else float(credit.iloc[-1]),
+                credit_velocity=(
+                    None
+                    if credit_velocity is None or credit_velocity.dropna().empty
+                    else float(credit_velocity.dropna().iloc[-1])
+                ),
+                liquidity=None if liquidity is None else float(liquidity.iloc[-1]),
+                curve_slope=None if curve is None else float(curve.iloc[-1]),
+            )
+            for months in HORIZON_MONTHS
+        }
+
+        simulation = self._simulate(publication, regime, index.latest, tail)
+        return InstabilityView(
+            rii=index,
+            crash=history,
+            factors=factors,
+            tail=tail,
+            simulation=simulation,
+            rii_source=source_index,
+        )
+
+    def _simulate(
+        self,
+        publication: FeatureSet,
+        regime: RegimeView,
+        rii: float | None,
+        tail: crash_mod.TailFit | None,
+    ) -> simulate_mod.SimulationResult | None:
+        """§11's Monte Carlo, conditioned on today's posterior.
+
+        Skipped when ``simulate.paths`` is zero, which is how a fast run — a
+        replay across many cutoffs, or a test — opts out of ten thousand paths
+        per horizon without a separate code path.
+        """
+        block = self._block("simulate")
+        paths = int(block.get("paths", simulate_mod.DEFAULT_PATHS))
+        if paths <= 0:
+            return None
+
+        labels = regime.model.fit.labels
+        posterior = np.array(
+            [float(regime.latest.get(label, 0.0)) for label in labels], dtype=float
+        )
+        stats = {s.state: (s.mean_return, s.volatility) for s in regime.model.fit.stats}
+        ordered = [stats[i] for i in range(len(labels))]
+
+        try:
+            return simulate_mod.run_simulation(
+                posterior=posterior,
+                transmat=np.asarray(regime.model.fit.transmat, dtype=float),
+                regime_stats=ordered,
+                start_log_level=float(publication.log_price.iloc[-1]),
+                periods_per_year=publication.series.periods_per_year,
+                tail=tail,
+                rii=rii,
+                paths=paths,
+                seed=int(block.get("seed", simulate_mod.DEFAULT_SEED)),
+            )
+        except (KeyError, ValueError) as err:
+            log.warning("equity: no Monte Carlo (%s)", err)
+            return None
 
     def _design(self, features: FeatureSet) -> RegimeDesign:
         block = self._block("regime")
@@ -479,15 +718,31 @@ class EquityEngine(AssetEngine):
             asset=self.name,
             as_of=as_of,
             regime=view.regime,
-            expected_return=self._expected_return(view),
-            risk_score=self._risk_score(view),
+            expected_return=self._expected_return(analysis, view),
+            risk_score=self._risk_score(analysis, view),
             confidence=round(view.confidence, 6),
             signals=self._signals(analysis, view),
             model_version=analysis.model_version,
             components=self._components(analysis, view),
         )
 
-    def _expected_return(self, view: RegimeView) -> float:
+    def _expected_return(self, analysis: EquityAnalysis, view: RegimeView) -> float:
+        """§10's strategic median, annualized — or the regime mean without it.
+
+        The Monte Carlo median at the strategic horizon is what the spec asks
+        for, and it is a *distribution* statistic: the engine publishes the
+        median because ``AssetState`` has one number, while the whole quantile
+        fan goes to ``forecast_distribution`` where nothing is lost.
+        """
+        instability = analysis.instability
+        simulation = None if instability is None else instability.simulation
+        if simulation is not None and "strategic" in simulation.forecasts:
+            forecast = simulation.forecasts["strategic"]
+            growth = forecast.median_log_level - simulation.start_log_level
+            return round(float(growth / forecast.years), 8)
+        return self._regime_expected_return(view)
+
+    def _regime_expected_return(self, view: RegimeView) -> float:
         """Posterior-weighted mean return of the fitted states, annualized.
 
         **Not** the §10 forecast — that is a Monte Carlo distribution median and
@@ -506,15 +761,24 @@ class EquityEngine(AssetEngine):
         )
         return round(float(weighted), 8)
 
-    def _risk_score(self, view: RegimeView) -> float:
-        """0-100 regime severity — the RII's regime term, not the RII itself.
+    def _risk_score(self, analysis: EquityAnalysis, view: RegimeView) -> float:
+        """The §3.2 Regime Instability Index, or the regime severity without it.
 
-        Posterior-weighted position on the risk-on ordering, scaled to the shared
-        axis: all weight on ``bull_expansion`` is 0, all weight on ``crisis`` is
-        100. Sub-milestone C replaces this with the full §3.2 composite, of which
-        this is one input; publishing the composite's name for one of its terms
-        would be worse than publishing the term and saying so.
+        The RII is what ``risk_score`` is specified to be. It falls back to
+        posterior-weighted regime severity when the composite cannot be built —
+        a run with no macro inputs at all — because a state with no risk score
+        is not publishable and severity is at least a true statement about the
+        posterior.
+
+        Read ``docs/backtests/equity-open-issues.md`` §12 before treating a move
+        in this number as information: as specified, three of its seven
+        components move *against* the other four during a crisis, and the
+        composite discriminates weakly as a result.
         """
+        instability = analysis.instability
+        if instability is not None and instability.latest_rii is not None:
+            return round(min(max(instability.latest_rii, 0.0), 100.0), 4)
+
         severity = sum(
             float(view.latest.get(label, 0.0)) * rank for rank, label in enumerate(REGIMES)
         )
@@ -568,6 +832,54 @@ class EquityEngine(AssetEngine):
             )
         )
 
+        instability = analysis.instability
+        if instability is not None:
+            horizon = max(instability.factors) if instability.factors else None
+            if horizon is not None:
+                factors = instability.factors[horizon]
+                # §4: all three, always. A consumer that wants the composite can
+                # multiply; a consumer given only the composite cannot decompose.
+                for name, value in (
+                    ("p_shock", factors.p_shock),
+                    ("p_transmission", factors.p_transmission),
+                ):
+                    signals.append(
+                        Signal(
+                            name=name,
+                            value=round(value, 6),
+                            direction=-1 if value > 0.5 else 0,
+                            note=(
+                                f"crash decomposition factor at {horizon}m; "
+                                "crash risk is the product of three factors and is "
+                                "published beside them, never instead of them"
+                            ),
+                        )
+                    )
+                signals.append(
+                    Signal(
+                        name="crash_risk",
+                        value=round(factors.crash_risk, 6),
+                        direction=-1 if factors.crash_risk > 10.0 else 0,
+                        note=(
+                            f"0-100 composite over {horizon}m = P(transition) x "
+                            "P(shock|fragile) x P(transmission); see the three factors"
+                        ),
+                    )
+                )
+            if instability.rii.missing:
+                signals.append(
+                    Signal(
+                        name="rii_components_missing",
+                        value=float(len(instability.rii.missing)),
+                        direction=0,
+                        note=(
+                            "RII built without "
+                            + ", ".join(instability.rii.missing)
+                            + "; weights renormalized over the components present"
+                        ),
+                    )
+                )
+
         if analysis.roles.calibration_is_proxy:
             signals.append(
                 Signal(
@@ -601,6 +913,15 @@ class EquityEngine(AssetEngine):
             components["regime_mean_return"] = round(stats.mean_return, 6)
             components["regime_volatility"] = round(stats.volatility, 6)
             components["regime_persistence_obs"] = round(stats.persistence, 2)
+
+        instability = analysis.instability
+        if instability is not None:
+            components.update(instability.rii.explain())
+            horizon = max(instability.factors) if instability.factors else None
+            if horizon is not None:
+                components.update(instability.factors[horizon].as_components())
+            if instability.simulation is not None:
+                components.update(instability.simulation.summary())
 
         for months, contributions in sorted(view.contributions.items()):
             # §14.3: top contributions per prediction, by magnitude.
@@ -655,7 +976,52 @@ class EquityEngine(AssetEngine):
             for key, value in jerk.items()
         )
         rows.extend(self._regime_outputs(analysis))
+        rows.extend(self._instability_outputs(analysis))
         return tuple(rows)
+
+    def _instability_outputs(self, analysis: EquityAnalysis) -> list[EngineOutput]:
+        """The RII and the three crash factors, per date.
+
+        §4 requires the decomposition to be published *as three factors*, so
+        each is its own metric. ``crash_risk`` is published beside them and
+        never instead of them — a chart can draw the composite, but it cannot
+        obtain it without the parts being available too.
+        """
+        view = analysis.instability
+        if view is None:
+            return []
+
+        cutoff = self._cutoff(view.crash.index)
+        rows = self._output_rows("rii", view.rii.index.loc[cutoff:])
+        for column in ("p_transition", "p_shock", "p_transmission", "crash_risk"):
+            rows.extend(self._output_rows(column, view.crash[column].loc[cutoff:]))
+        return rows
+
+    def forecasts(self, world: WorldState) -> tuple[ForecastQuantile, ...]:
+        """§10's quantile distributions. Quantiles only, by contract and by schema."""
+        try:
+            analysis = self.analyze(world)
+        except StateUnavailable as err:
+            log.warning("equity: no forecasts — %s", err)
+            return ()
+
+        view = analysis.instability
+        if view is None or view.simulation is None:
+            return ()
+
+        as_of = analysis.as_of or world.as_of
+        return tuple(
+            ForecastQuantile(
+                asset=self.name,
+                as_of=as_of,
+                horizon=row["horizon"],
+                quantile=float(row["quantile"]),
+                value=float(row["value"]),
+                educational_only=bool(row["educational_only"]),
+                model_version=analysis.model_version,
+            )
+            for row in simulate_mod.forecast_rows(view.simulation)
+        )
 
     def _regime_outputs(self, analysis: EquityAnalysis) -> list[EngineOutput]:
         """Regime severity and the transition probabilities, for the charts.

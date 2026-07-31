@@ -31,12 +31,28 @@ def test_the_engine_registers_itself():
 def test_it_declares_every_configured_price_series(equity_engine):
     """All four, not just the resolved ones: whether a role is *available* is a
     question about D1, and a series the run never loads can never be available."""
-    assert set(equity_engine.required_series()) == {
+    assert {
         PRIMARY,
         REGIME_PROXY,
         BACKFILL,
         DEEP_HISTORY,
-    }
+    } <= set(equity_engine.required_series())
+
+
+def test_it_declares_the_instability_inputs_it_can_do_without(equity_engine):
+    """M4 added six non-price series, every one of them optional.
+
+    They feed the RII's credit and liquidity components and the crash
+    decomposition's fragility score. All are declared so the run can load them
+    and none is required, because a composite that vanishes when one FRED series
+    is late is worse than one that names what it was built from — which is what
+    `RiiResult.missing` and `transmission_inputs` exist to do.
+    """
+    required = set(equity_engine.required_series())
+    assert {"FRED:BAMLH0A0HYM2", "FRED:NFCI", "FRED:T10Y3M"} <= required
+    # The money engine's short rate arrives as data, not as an import: §5's
+    # layering forbids equity from importing rates or money at all.
+    assert "ENGINE:money.short_rate" in required
 
 
 def test_the_model_version_names_the_calibration_series(equity_engine, equity_observations):
@@ -191,11 +207,19 @@ def test_a_missing_artifact_is_not_fatal(equity_engine, equity_observations):
     assert len(analysis.publication.frame) > 2000
 
 
-def test_the_daily_run_only_pays_for_the_publication_path(equity_engine, equity_observations):
-    """The calibration path is 10k observations of MLE; a run that will not use
-    it should not compute it."""
+def test_the_daily_run_skips_the_deep_history_path(equity_engine, equity_observations):
+    """The 1871+ monthly path is a backtest input, not a daily one.
+
+    Calibration *is* computed daily from M4 onward: the RII scores each component
+    as an expanding percentile, and against ten years of publication history a
+    2020 reading would be ranked against a window that starts in 2016. The
+    century-long calibration series is what makes the percentile mean anything.
+    Deep history stays out — it is monthly, and mixing frequencies into one
+    percentile is a different bug.
+    """
     world = world_from(equity_observations)
-    assert set(equity_engine.analyze(world).features) == {"publication"}
+    assert set(equity_engine.analyze(world).features) == {"publication", "calibration"}
+    assert "deep_history" not in equity_engine.analyze(world).features
     equity_engine._cache = None
     assert set(equity_engine.analyze(world, roles=ALL_ROLES).features) == set(ALL_ROLES)
 

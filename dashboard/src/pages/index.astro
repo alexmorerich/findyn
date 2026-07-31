@@ -3,66 +3,70 @@ import Base from '../layouts/Base.astro';
 ---
 
 <Base
-  title="System Status"
-  description="Live status of the FinDyn serving plane, compute plane, and D1 feature store."
-  eyebrow="Instrument panel"
-  heading="System status"
-  intro="What is running, what last ingested, and what is still ahead. Everything on this page is read from the live API by your browser; nothing is baked into the page."
+  title="Market overview"
+  description="Where the S&P 500 is, how fast it is moving, which regime it is in, how unstable that regime is, and the distribution of where it could go — read live from the FinDynamics API."
+  eyebrow="FinDynamics"
+  heading="Where the market is"
+  intro="Position, velocity, regime, instability and a distribution — not a target. Every number here is estimated from information that was available on its own date, and every one of them links to the page that shows how it was built."
 >
+  <section class="panel" aria-labelledby="now-h">
+    <div class="panel__head">
+      <h2 id="now-h">Right now</h2>
+      <span class="panel__note">/api/v1/state &middot; /api/v1/instability</span>
+    </div>
+    <p class="prose">
+      The four readings that the whole system exists to produce: which regime the market is in and
+      how confident the model is, how fast the filtered level is moving, how close the regime looks
+      to changing, and whether the system would transmit a shock. Each is a link into
+      <a href="/equity">FinEquity</a>, where the same number appears with its full derivation.
+    </p>
+    <div class="tiles" id="overview-now" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="crash-h">
+    <div class="panel__head">
+      <h2 id="crash-h">Crash risk, decomposed</h2>
+      <span class="panel__note">FINDYN_V1_SPEC.md &sect;4</span>
+    </div>
+    <p class="prose">
+      Never one number. A market that may turn without breaking and a market that is fine until it
+      is not produce the same composite and call for opposite responses, so the three factors are
+      published together and the product only beside them.
+    </p>
+    <div id="overview-crash" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="fan-h">
+    <div class="panel__head">
+      <h2 id="fan-h">Where it could go</h2>
+      <span class="panel__note">/api/v1/forecast</span>
+    </div>
+    <p class="prose">
+      Quantile bands from at least ten thousand simulated paths per horizon, conditioned on
+      today&rsquo;s regime posterior. There is no point estimate here and there is no
+      <em>&ldquo;S&amp;P at X&rdquo;</em> anywhere in this system &mdash; the table these are stored
+      in has no column for one.
+    </p>
+    <div id="overview-forecast" style="margin-top:0.85rem"></div>
+  </section>
+
   <section class="panel" aria-labelledby="engines-h">
     <div class="panel__head">
       <h2 id="engines-h">Engines</h2>
       <span class="panel__note">/api/v1/assets</span>
     </div>
     <p class="prose">
-      One card per registered asset engine, read from the registry rather than from whatever
-      happens to be in the database — an engine that has shipped but not yet run says so instead
-      of disappearing.
+      One card per registered engine, read from the registry rather than from whatever happens to be
+      in the database &mdash; an engine that has shipped but not yet run says so instead of
+      disappearing. Serving-plane health, ingestion sources and the endpoint contract live on
+      <a href="/status">system status</a>.
     </p>
     <div id="engines" style="margin-top:0.85rem"></div>
-  </section>
-
-  <section class="panel" aria-labelledby="planes-h">
-    <div class="panel__head">
-      <h2 id="planes-h">Planes</h2>
-      <span class="panel__note">/api/v1/meta · /api/v1/health</span>
-    </div>
-    <div class="tiles" id="status-tiles"></div>
-  </section>
-
-  <section class="panel" aria-labelledby="engine-h">
-    <div class="panel__head">
-      <h2 id="engine-h">Engine</h2>
-      <span class="panel__note">/api/v1/meta</span>
-    </div>
-    <div id="engine-meta"></div>
-  </section>
-
-  <section class="panel" aria-labelledby="sources-h">
-    <div class="panel__head">
-      <h2 id="sources-h">Ingestion sources</h2>
-      <span class="panel__note">/api/v1/health · ingestion_log</span>
-    </div>
-    <div id="sources"></div>
-  </section>
-
-  <section class="panel" aria-labelledby="roadmap-h">
-    <div class="panel__head">
-      <h2 id="roadmap-h">Reserved endpoints</h2>
-      <span class="panel__note">FINDYN_V1_SPEC.md §13</span>
-    </div>
-    <p class="prose">
-      These endpoints are part of the published contract but are delivered by later milestones.
-      Until then the API answers <code>501 not_implemented</code> with the milestone that will
-      deliver them, so a consumer can tell &ldquo;not built yet&rdquo; from &ldquo;built, but no
-      data&rdquo;. The status below is the API&rsquo;s own answer, probed live.
-    </p>
-    <div id="roadmap" style="margin-top:0.85rem"></div>
   </section>
 </Base>
 
 <script>
-  import '../scripts/status';
+  import '../scripts/overview';
   import { mountEngines } from '../scripts/engines';
 
   void mountEngines('#engines');

@@ -73,9 +73,10 @@ describe('D1 schema (FINDYN_V1_SPEC.md §7)', () => {
   it('adds an asset column to the v1 output tables, defaulting to SPX (0004)', async () => {
     // Additive only: existing rows are S&P500 by definition, so the default
     // makes the migration safe for queries that never mention the column.
-    // derived_features (0005) and regime_state (0006) are excluded — both were
-    // rebuilt with asset in the primary key and a required value; see below.
-    for (const table of ['force_scores', 'instability_index', 'forecast_distribution']) {
+    // derived_features (0005), regime_state (0006) and forecast_distribution
+    // (0007) are excluded — each was rebuilt with asset in the primary key and a
+    // required value; see below.
+    for (const table of ['force_scores', 'instability_index']) {
       const row = await env.DB.prepare(
         `SELECT dflt_value FROM pragma_table_info('${table}') WHERE name = 'asset'`,
       ).first<{ dflt_value: string }>();
@@ -103,6 +104,38 @@ describe('D1 schema (FINDYN_V1_SPEC.md §7)', () => {
     ).all<{ name: string }>();
 
     expect(results.map((r) => r.name)).toEqual(['asset', 'date', 'regime', 'model_version']);
+  });
+
+  it('keys forecast_distribution by asset as well (0007)', async () => {
+    // `tactical` and `0.5` are the least engine-specific words in the schema.
+    // Under the old key a second engine's p50 landed on equity's row and won by
+    // whichever job ran second — with no error, no count change, and no way to
+    // tell from the data which asset the number belonged to.
+    const { results } = await env.DB.prepare(
+      `SELECT name FROM pragma_table_info('forecast_distribution') WHERE pk > 0 ORDER BY pk`,
+    ).all<{ name: string }>();
+
+    expect(results.map((r) => r.name)).toEqual([
+      'asset',
+      'as_of',
+      'horizon',
+      'quantile',
+      'model_version',
+    ]);
+  });
+
+  it('has no column a point forecast could be written to (§0 non-goal 1)', async () => {
+    // Structural, not conventional. "No deterministic price target" survives a
+    // reviewer who thinks one would be convenient only if there is nowhere to
+    // put it.
+    const { results } = await env.DB.prepare(
+      `SELECT name FROM pragma_table_info('forecast_distribution')`,
+    ).all<{ name: string }>();
+
+    const names = results.map((r) => r.name);
+    expect(names).toContain('quantile');
+    expect(names).not.toContain('target');
+    expect(names).not.toContain('point_estimate');
   });
 
   it('accepts two engines publishing the same feature name on one date', async () => {

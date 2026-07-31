@@ -201,6 +201,26 @@ engines:
       # SHILLER:REAL_PRICE exists for consumers that want the deflated series.
       deep_history: {id: "SHILLER:NOMINAL_PRICE", provider: shiller, frequency: monthly, publication_lag_days: 30}
 
+      # --- M4 inputs -------------------------------------------------------
+      # The RII composite (§3.2) and the transmission factor (§4) read these.
+      # Every one is already ingested for a shared factor; naming them here
+      # declares the ROLE each plays for this engine, which is not derivable
+      # from the fact that the credit factor also wants the same series. Loaders
+      # de-duplicate by id, so they are fetched and stored once.
+      credit_spread:    {id: "FRED:BAMLH0A0HYM2", provider: fred, frequency: daily, publication_lag_days: 1}
+      liquidity_stress: {id: "FRED:NFCI",         provider: fred, frequency: weekly, publication_lag_days: 7}
+      # Bonds enter the stock-bond correlation as a YIELD; rii.py converts to a
+      # return proxy by negating the change, which is the sign that would be
+      # invisible if it were wrong.
+      bond_yield:       {id: "FRED:DGS10",        provider: fred, frequency: daily, publication_lag_days: 1}
+      # The curve state, for the transmission channel (§4).
+      curve_slope:      {id: "FRED:T10Y3M",       provider: fred, frequency: daily, publication_lag_days: 1}
+
+      # The numeraire, read back as data rather than imported (§C, 03-contracts
+      # §4b). FinMoney publishes it; FinEquity discounts against it and never
+      # learns that FinMoney exists.
+      risk_free:        {id: "ENGINE:money.short_rate", provider: engine_output, frequency: daily, publication_lag_days: 0}
+
 # Cached in KV with a short TTL for the dashboard's live tiles (§6).
 realtime_cache:
   ttl_seconds: 900

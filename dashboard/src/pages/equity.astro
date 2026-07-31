@@ -68,6 +68,55 @@ import Base from '../layouts/Base.astro';
     <div id="equity-transitions" style="margin-top:0.85rem"></div>
   </section>
 
+  <section class="panel" aria-labelledby="rii-h">
+    <div class="panel__head">
+      <h2 id="rii-h">Regime instability</h2>
+      <span class="panel__note">/api/v1/instability &middot; RII</span>
+    </div>
+    <p class="prose">
+      &sect;3.2&rsquo;s composite, and the reason no fourth derivative is published anywhere on this
+      site. Seven measurable components &mdash; the model&rsquo;s own posterior entropy and
+      confidence deficit, jerk, volatility of volatility, the stock&ndash;bond correlation against
+      its own baseline, credit velocity and liquidity stress &mdash; each scored 0&ndash;100 as a
+      point-in-time expanding percentile. A component the information set cannot supply is
+      <strong>named and dropped</strong>, and the weights renormalize over what remains; scoring it
+      zero would read as &ldquo;maximally stable&rdquo;, which is the worst possible default for a
+      broken data feed.
+    </p>
+    <div id="equity-instability" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="crash-h">
+    <div class="panel__head">
+      <h2 id="crash-h">Crash risk &mdash; three factors</h2>
+      <span class="panel__note">AssetState.signals &middot; &sect;4</span>
+    </div>
+    <p class="prose">
+      Crash risk is never published as one number. It decomposes into the probability the regime
+      turns, the probability a tail-sized shock arrives, and whether the system would transmit or
+      absorb it &mdash; and the three call for different responses, which a product erases. The
+      transition factor is derived here from the regime posterior and the transition matrix, not
+      taken from the classifier: the classifier has no demonstrated out-of-sample skill, so
+      transition probabilities are treated strictly as descriptive state shifts.
+    </p>
+    <div id="equity-crash" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="forecast-h">
+    <div class="panel__head">
+      <h2 id="forecast-h">Forecast distribution</h2>
+      <span class="panel__note">/api/v1/forecast &middot; Monte Carlo</span>
+    </div>
+    <p class="prose">
+      Ten thousand paths per horizon, each starting from a regime drawn from today&rsquo;s
+      posterior, stepping through the fitted transition matrix, with tail shocks drawn from the same
+      generalized-Pareto fit the crash decomposition uses. The output is a set of quantiles and
+      nothing else &mdash; there is no point estimate here because the table it is stored in has no
+      column for one.
+    </p>
+    <div id="equity-forecast" style="margin-top:0.85rem"></div>
+  </section>
+
   <section class="panel" aria-labelledby="price-h">
     <div class="panel__head">
       <h2 id="price-h">Filtered price against the close</h2>

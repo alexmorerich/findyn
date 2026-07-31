@@ -250,6 +250,48 @@ class RegimeProbability:
 
 
 @dataclass(frozen=True)
+class ForecastQuantile:
+    """One quantile of one horizon's forecast — the ``forecast_distribution`` row.
+
+    A separate shape from :class:`EngineOutput` because its key is
+    (as_of, horizon, quantile) and because of what it must *not* be able to
+    express: there is no column here for a point forecast. §0's first non-goal
+    forbids deterministic price targets, and a schema that cannot represent one
+    enforces that better than a convention everybody has to remember.
+    """
+
+    asset: str
+    as_of: date
+    #: Forecast horizon name from the HORIZONS vocabulary.
+    horizon: str
+    #: 0-1. The published grid is core.contracts.vocab.QUANTILES.
+    quantile: float
+    #: Projected log index level at that quantile.
+    value: float
+    #: Excluded from every accuracy evaluation (§10). Carried on the row so a
+    #: consumer cannot plot a 50-year scenario beside a 6-month forecast without
+    #: having been told which is which.
+    educational_only: bool
+    model_version: str
+
+    def __post_init__(self) -> None:
+        if self.asset not in ASSETS:
+            raise ContractError(
+                f"ForecastQuantile.asset {self.asset!r} is not one of {list(ASSETS)}"
+            )
+        if not self.horizon:
+            raise ContractError("ForecastQuantile.horizon must be non-empty")
+        if not self.model_version:
+            raise ContractError("ForecastQuantile.model_version must be non-empty")
+        _check_date(self.as_of, "ForecastQuantile.as_of")
+        _check_range(self.quantile, 0.0, 1.0, "ForecastQuantile.quantile")
+        if isinstance(self.value, bool) or not isinstance(self.value, int | float):
+            raise ContractError(f"ForecastQuantile.value: expected a number, got {self.value!r}")
+        if not math.isfinite(self.value):
+            raise ContractError(f"ForecastQuantile.value must be finite, got {self.value!r}")
+
+
+@dataclass(frozen=True)
 class EngineOutput:
     """One wide metric for the ``engine_output`` table (NS level/slope, carry, …).
 

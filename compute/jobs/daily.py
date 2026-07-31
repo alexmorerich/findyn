@@ -28,6 +28,7 @@ from findynamics.core.contracts.state import (
     DerivedFeature,
     EngineOutput,
     FactorState,
+    ForecastQuantile,
     RegimeProbability,
     WorldState,
 )
@@ -150,6 +151,19 @@ def regime_state_payload(row: RegimeProbability) -> dict[str, Any]:
     }
 
 
+def forecast_payload(row: ForecastQuantile) -> dict[str, Any]:
+    """One ``forecast_distribution`` row — a quantile, never a point forecast."""
+    return {
+        "asset": row.asset,
+        "as_of": row.as_of.isoformat(),
+        "horizon": row.horizon,
+        "quantile": row.quantile,
+        "value": row.value,
+        "educational_only": row.educational_only,
+        "model_version": row.model_version,
+    }
+
+
 def derived_feature_payload(feature: DerivedFeature) -> dict[str, Any]:
     """One ``derived_features`` row.
 
@@ -194,6 +208,7 @@ def run(
     outputs: list[dict[str, Any]] = []
     features: list[dict[str, Any]] = []
     regimes: list[dict[str, Any]] = []
+    forecasts: list[dict[str, Any]] = []
     failed: list[str] = []
     silent: list[str] = []
 
@@ -218,6 +233,7 @@ def run(
             rows = engine.outputs(world)
             feature_rows = engine.derived_features(world)
             regime_rows = engine.regime_states(world)
+            forecast_rows = engine.forecasts(world)
         except Exception as err:
             failed.append(engine.name)
             log.exception("engine %s failed publishing its outputs: %s", engine.name, err)
@@ -228,8 +244,9 @@ def run(
         outputs.extend(engine_output_payload(row) for row in rows)
         features.extend(derived_feature_payload(row) for row in feature_rows)
         regimes.extend(regime_state_payload(row) for row in regime_rows)
+        forecasts.extend(forecast_payload(row) for row in forecast_rows)
         log.info(
-            "%s: %s (+%d output rows, +%d features, +%d regime rows)",
+            "%s: %s (+%d output rows, +%d features, +%d regime rows, +%d forecast rows)",
             engine.name,
             (
                 "no state"
@@ -240,6 +257,7 @@ def run(
             len(rows),
             len(feature_rows),
             len(regime_rows),
+            len(forecast_rows),
         )
 
     if not states and not outputs and not features:
@@ -263,6 +281,7 @@ def run(
         "engine_output": outputs,
         "derived_features": features,
         "regime_state": regimes,
+        "forecast_distribution": forecasts,
     }
 
     if out is not None:

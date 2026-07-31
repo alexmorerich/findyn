@@ -56,7 +56,11 @@ export interface TwoLayerState {
    * null rather than an absent key: a consumer must be able to tell "not
    * computed yet" from "the field moved".
    */
-  regime: null | { label: string; confidence: number | null; model_version: string };
+  regime: null | {
+    label: string;
+    confidence: number | null;
+    model_version: string;
+  };
 }
 
 function parseJson<T>(raw: string | null, fallback: T): T {
@@ -155,9 +159,7 @@ export async function getForces(
   opts: { from?: string; to?: string; force?: string; limit?: number } = {},
 ): Promise<ForcePoint[]> {
   if (opts.force && !(FORCES as readonly string[]).includes(opts.force)) {
-    throw new UnknownForceError(
-      `unknown force ${opts.force}; expected one of ${FORCES.join('|')}`,
-    );
+    throw new UnknownForceError(`unknown force ${opts.force}; expected one of ${FORCES.join('|')}`);
   }
 
   const limit = Math.min(Math.max(opts.limit ?? 5000, 1), 20000);
@@ -204,7 +206,6 @@ export async function getForces(
     }))
     .reverse();
 }
-
 
 // ---------------------------------------------------------------------------
 // §13 /regime — regime probability history
@@ -309,7 +310,12 @@ export async function getRegimeHistory(
         regime = name;
       }
     }
-    return { as_of: date, probabilities, regime, confidence: Math.max(confidence, 0) };
+    return {
+      as_of: date,
+      probabilities,
+      regime,
+      confidence: Math.max(confidence, 0),
+    };
   });
 
   const target = opts.points;
@@ -338,5 +344,197 @@ export async function getRegimeHistory(
     regimes: REGIMES,
     model_version: newest.model_version,
     points,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// §13 /instability and /forecast — the M4 read surface
+// ---------------------------------------------------------------------------
+
+/** Metrics `/instability` pivots. All three factors, never the composite alone. */
+export const INSTABILITY_METRICS = [
+  'rii',
+  'p_transition',
+  'p_shock',
+  'p_transmission',
+  'crash_risk',
+] as const;
+
+export interface InstabilityPoint {
+  as_of: string;
+  rii: number | null;
+  p_transition: number | null;
+  p_shock: number | null;
+  p_transmission: number | null;
+  crash_risk: number | null;
+}
+
+export interface InstabilityHistory {
+  asset: string;
+  count: number;
+  available: number;
+  decimated: { from: number; to: number; method: string } | null;
+  points: InstabilityPoint[];
+}
+
+/**
+ * RII and the crash decomposition per date.
+ *
+ * Assembled from `engine_output` rather than the v1 `instability_index` table.
+ * Both hold the same numbers and `engine_output` is where per-date engine
+ * metrics already live, keyed and indexed for exactly this read; adding a
+ * second write path to a parallel table would mean two places to disagree about
+ * what the RII was on a given day.
+ *
+ * §4's rule is enforced in the *shape*: a caller receives all three factors or
+ * none. There is no way to request `crash_risk` from this endpoint alone.
+ */
+export async function getInstability(
+  env: Env,
+  asset = 'equity',
+  opts: { from?: string; to?: string; points?: number } = {},
+): Promise<InstabilityHistory> {
+  const conditions = ['asset = ?', `metric IN (${INSTABILITY_METRICS.map(() => '?').join(',')})`];
+  const bindings: (string | number)[] = [asset, ...INSTABILITY_METRICS];
+  if (opts.from) {
+    conditions.push('as_of >= ?');
+    bindings.push(opts.from);
+  }
+  if (opts.to) {
+    conditions.push('as_of <= ?');
+    bindings.push(opts.to);
+  }
+
+  const { results } = await env.DB.prepare(
+    `SELECT as_of, metric, value FROM engine_output
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY as_of ASC
+      LIMIT ?`,
+  )
+    .bind(...bindings, MAX_HISTORY_ROWS)
+    .all<{ as_of: string; metric: string; value: number }>();
+
+  const byDate = new Map<string, Record<string, number>>();
+  for (const row of results ?? []) {
+    const entry = byDate.get(row.as_of) ?? {};
+    entry[row.metric] = row.value;
+    byDate.set(row.as_of, entry);
+  }
+
+  const all: InstabilityPoint[] = [...byDate.keys()].sort().map((as_of) => {
+    const row = byDate.get(as_of)!;
+    return {
+      as_of,
+      rii: row.rii ?? null,
+      p_transition: row.p_transition ?? null,
+      p_shock: row.p_shock ?? null,
+      p_transmission: row.p_transmission ?? null,
+      crash_risk: row.crash_risk ?? null,
+    };
+  });
+
+  const target = opts.points;
+  if (target && target >= MIN_THRESHOLD && all.length > target) {
+    // Decimated on the RII, so the dates kept are the ones where instability
+    // actually moved rather than an arbitrary stride through calm stretches.
+    const sampled = decimate(
+      all.map((p, index) => ({
+        index,
+        x: Date.parse(`${p.as_of}T00:00:00Z`),
+        y: p.rii ?? 0,
+      })),
+      target,
+    );
+    return {
+      asset,
+      count: sampled.length,
+      available: all.length,
+      decimated: { from: all.length, to: sampled.length, method: 'lttb' },
+      points: sampled.map((s) => all[s.index]!),
+    };
+  }
+
+  return {
+    asset,
+    count: all.length,
+    available: all.length,
+    decimated: null,
+    points: all,
+  };
+}
+
+export interface ForecastBand {
+  horizon: string;
+  educational_only: boolean;
+  /** Quantile -> projected log index level. */
+  quantiles: Record<string, number>;
+}
+
+export interface ForecastResponse {
+  asset: string;
+  as_of: string | null;
+  model_version: string | null;
+  horizons: ForecastBand[];
+}
+
+/**
+ * §13 `/forecast` — quantile bands per horizon.
+ *
+ * `educational_only` travels on every band. §10 excludes those horizons from
+ * accuracy evaluation entirely, and a consumer that cannot tell a 50-year
+ * scenario from a 6-month forecast will eventually plot them on one axis.
+ */
+export async function getForecast(
+  env: Env,
+  asset = 'equity',
+  horizon?: string,
+): Promise<ForecastResponse> {
+  const newest = await env.DB.prepare(
+    `SELECT as_of, model_version FROM forecast_distribution
+      WHERE asset = ?
+      ORDER BY as_of DESC, model_version DESC
+      LIMIT 1`,
+  )
+    .bind(asset)
+    .first<{ as_of: string; model_version: string }>();
+
+  if (!newest) return { asset, as_of: null, model_version: null, horizons: [] };
+
+  const conditions = ['asset = ?', 'as_of = ?', 'model_version = ?'];
+  const bindings: string[] = [asset, newest.as_of, newest.model_version];
+  if (horizon) {
+    conditions.push('horizon = ?');
+    bindings.push(horizon);
+  }
+
+  const { results } = await env.DB.prepare(
+    `SELECT horizon, quantile, value, educational_only FROM forecast_distribution
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY horizon, quantile`,
+  )
+    .bind(...bindings)
+    .all<{
+      horizon: string;
+      quantile: number;
+      value: number;
+      educational_only: number;
+    }>();
+
+  const bands = new Map<string, ForecastBand>();
+  for (const row of results ?? []) {
+    const band = bands.get(row.horizon) ?? {
+      horizon: row.horizon,
+      educational_only: Boolean(row.educational_only),
+      quantiles: {},
+    };
+    band.quantiles[String(row.quantile)] = row.value;
+    bands.set(row.horizon, band);
+  }
+
+  return {
+    asset,
+    as_of: newest.as_of,
+    model_version: newest.model_version,
+    horizons: [...bands.values()],
   };
 }
