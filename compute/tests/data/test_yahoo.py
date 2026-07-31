@@ -22,7 +22,7 @@ from findynamics.data.providers.resilience import (
     RetryPolicy,
     Transport,
 )
-from findynamics.data.providers.yahoo import YahooProvider
+from findynamics.data.providers.yahoo import HISTORY_FLOOR_EPOCH, YahooProvider
 from tests.conftest import ok
 
 #: New York is UTC-4 in summer. Each timestamp is a session *open* (09:30 local
@@ -177,6 +177,20 @@ class TestMetadataAndCatalogue:
         assert metadata.first_observation == date(1927, 12, 30)
         assert metadata.frequency == "daily"
 
+    def test_metadata_and_observations_agree_on_the_unit(self):
+        """REGRESSION — an index level is not a price in dollars.
+
+        Yahoo reports currency USD for ^GSPC. Taking that for the metadata
+        while every observation carries 'index' is a real disagreement, and
+        the quality engine withholds the whole series over it rather than
+        guessing which side is right. Caught on the first live fetch.
+        """
+        provider = build(chart())
+        metadata = provider.fetch_metadata("YAHOO:^GSPC")
+        observations = provider.fetch_observations("YAHOO:^GSPC")
+        assert metadata.unit == "index"
+        assert {o.unit for o in observations} == {metadata.unit}
+
     def test_metadata_says_the_source_is_unversioned(self):
         """A consumer reading this series should know what it is resting on."""
         assert "unversioned" in (build(chart()).fetch_metadata("YAHOO:^GSPC").notes or "")
@@ -195,13 +209,12 @@ class TestWindowing:
         observations = build(chart()).fetch_observations("YAHOO:^GSPC", start=date(2025, 7, 29))
         assert [o.observation_date for o in observations] == [date(2025, 7, 29)]
 
-    def test_an_unbounded_fetch_asks_for_max(self):
-        """`range=max` is what reaches 1927; a default window would not."""
+    def _params_used(self, body: str, **kwargs) -> dict:
         seen: dict = {}
 
         def fetcher(url, *, params=None, headers=None, timeout=30.0):
             seen.update(params or {})
-            return ok(chart())
+            return ok(body)
 
         transport = Transport(
             "yahoo",
@@ -211,5 +224,61 @@ class TestWindowing:
             retry=RetryPolicy(max_attempts=1),
             cache=MemoryCache(),
         )
-        YahooProvider(transport).fetch_observations("YAHOO:^GSPC")
-        assert seen.get("range") == "max"
+        YahooProvider(transport).fetch_observations("YAHOO:^GSPC", **kwargs)
+        return seen
+
+    def test_an_unbounded_fetch_asks_for_an_explicit_window_not_max(self):
+        """REGRESSION — ``range=max`` is answered with coarser bars.
+
+        Asked for max at interval=1d, the live API returned 168 bars starting
+        in 1984 for a series it holds daily from 1927: roughly quarterly, with
+        no indication it had substituted anything. An explicit period1/period2
+        is honoured, so that is what is always sent.
+        """
+        seen = self._params_used(chart())
+        assert "range" not in seen
+        assert int(seen["period1"]) == HISTORY_FLOOR_EPOCH
+        assert seen["interval"] == "1d"
+
+    def test_the_floor_reaches_back_past_the_first_trade(self):
+        """^GSPC starts 1927; the floor must not clip it."""
+        assert HISTORY_FLOOR_EPOCH < -1325583000
+
+
+class TestIntervalDowngradeIsRefused:
+    """The API can answer interval=1d with coarser bars and not say so."""
+
+    def _spaced(self, n: int, step_days: int) -> str:
+        day = 86400
+        return chart(
+            timestamps=[T1 + i * step_days * day for i in range(n)],
+            closes=[100.0 + i for i in range(n)],
+        )
+
+    def test_daily_bars_pass(self):
+        observations = build(self._spaced(60, 1)).fetch_observations("YAHOO:^GSPC")
+        assert len(observations) == 60
+
+    def test_quarterly_bars_are_refused(self):
+        """The exact shape the live API returned for range=max."""
+        with pytest.raises(ParseError, match="coarser interval"):
+            build(self._spaced(168, 91)).fetch_observations("YAHOO:^GSPC")
+
+    def test_weekly_bars_are_refused(self):
+        with pytest.raises(ParseError, match="median 7 days"):
+            build(self._spaced(60, 7)).fetch_observations("YAHOO:^GSPC")
+
+    def test_a_short_series_is_not_judged_on_its_spacing(self):
+        """Too few bars to tell daily from weekly; refusing would be a guess."""
+        assert len(build(self._spaced(5, 7)).fetch_observations("YAHOO:^GSPC")) == 5
+
+    def test_a_holiday_heavy_stretch_still_passes(self):
+        """Weekends and holidays must not trip it: the median stays 1."""
+        day = 86400
+        gaps = [1, 1, 3, 1, 4, 1, 1, 3, 1, 1] * 6  # weekends + a long weekend
+        stamps, t = [T1], T1
+        for g in gaps:
+            t += g * day
+            stamps.append(t)
+        body = chart(timestamps=stamps, closes=[100.0 + i for i in range(len(stamps))])
+        assert len(build(body).fetch_observations("YAHOO:^GSPC")) == len(stamps)
