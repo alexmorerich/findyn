@@ -28,7 +28,7 @@ interchangeable, and the difference decides sub-milestone B:
 | `series.yaml` role | series | frequency | span | obs | engine role (`prices.py`) |
 |---|---|---|---|---|---|
 | `primary` | `FRED:SP500` | daily | 2016-08 → now | 2,512 | `publication` |
-| `backfill` | `STOOQ:^SPX` | daily | pending probe | — | `calibration` if available |
+| `backfill` | `STOOQ:^SPX` | daily | **unavailable** | — | — (see below) |
 | `regime_proxy` | `FRED:NASDAQ100` | daily | 1986-01 → now | 11,994 | `calibration` otherwise |
 | `deep_history` | `SHILLER:NOMINAL_PRICE` | monthly | 1871 → now | ~1,860 | `deep_history` |
 
@@ -47,13 +47,21 @@ Consequences you must design around rather than discover:
   Say so wherever a fitted parameter depends on it.
 - **`SHILLER:NOMINAL_PRICE` is monthly.** It is the only 1871+ source and the
   only basis for the spec's "1871+ drawdowns".
-- **`STOOQ:^SPX` would be daily S&P back to ~1928** and is the ideal backbone,
-  but the endpoint bot-filters some networks. A CI probe
-  (`.github/workflows/compute-backfill.yml`, run it with `provider: stooq`)
-  settles whether it is available. **Check that run's artifact before starting
-  sub-milestone B.** If it succeeded, prefer `STOOQ:^SPX` as the daily
-  calibration series and demote `regime_proxy` to a cross-check; if it failed,
-  the split below stands.
+- **`STOOQ:^SPX` is unavailable — this question is settled, do not re-litigate
+  it.** It would have been daily S&P back to ~1928 and the ideal backbone, but
+  the endpoint serves a JavaScript proof-of-work challenge instead of CSV. The
+  filter is applied per-egress, so it was worth testing from CI rather than
+  assuming; [run 30594390520][probe] confirms GitHub's runners are filtered
+  too, exactly as a developer network is. The adapter detects the challenge and
+  fails fast, so nothing hangs — but no amount of retrying will produce data.
+  `calibration` is therefore `FRED:NASDAQ100`, and every consequence below
+  follows from that rather than from a choice still open to you.
+  Re-running the probe is cheap if you want to confirm it yourself
+  (`gh workflow run compute-backfill.yml --ref main -f provider=stooq`);
+  recovering daily S&P history before 2016 needs a different source entirely,
+  which is out of scope for P3.
+
+[probe]: https://github.com/alexmorerich/findyn/actions/runs/30594390520
 - **`FRED:SP500` exists in FRED but not ALFRED**, so it carries no true
   vintages: its release dates are synthesized from the configured 1-day lag by
   `data/vintages.py`. That is expected, not a bug — but it means the rule-5
@@ -74,14 +82,16 @@ forces already exist as factors (P0); do not recompute them in the engine.
 
 - `prices.py`: resolve the four roles above into the three inputs the rest of
   the engine names — `publication` (always `primary`), `calibration`
-  (`backfill` where the probe landed it, else `regime_proxy`), and
-  `deep_history` — before any feature code runs. This is the only place a role
-  becomes a series; nothing downstream reads `series.yaml` roles directly. The
-  choice is a fixed precedence recorded in `model_version`, never "whichever
-  role has rows today": test that resolution is a pure function of what D1
-  holds, so ingesting a lower-precedence role cannot silently move the training
-  window mid-phase. Whatever the probe recovers is an ingested D1 fact — the
-  engine never calls Stooq at runtime.
+  (`regime_proxy` today; `backfill` takes precedence if a daily S&P source ever
+  lands in D1), and `deep_history` — before any feature code runs. This is the
+  only place a role becomes a series; nothing downstream reads `series.yaml`
+  roles directly. The choice is a fixed precedence recorded in `model_version`,
+  never "whichever role has rows today": test that resolution is a pure
+  function of what D1 holds, so ingesting a lower-precedence role cannot
+  silently move the training window mid-phase. Keep the `backfill` branch even
+  though nothing fills it now — it is what makes a future daily S&P source a
+  data question rather than a code change — but do not spend effort trying to
+  populate it. The engine never calls a price API at runtime; it reads D1.
 - `features/kalman.py`: local-linear-trend Kalman (statsmodels), **filtered**
   estimates only — the RTS smoother is banned from the feature path.
 - `features/ffd.py`: fixed-width fractional differentiation; minimum `d`
@@ -111,15 +121,17 @@ path for the published state. Record which series supplied the parameters in
 whether a number came from the S&P or a proxy.
 
 **The transfer is only valid if the features are scale-free — prove it, don't
-assume it.** When `calibration` is `FRED:NASDAQ100` it is a more volatile index
-than `publication`, and a Gaussian HMM fitted in raw feature space encodes that
-volatility in its state means and covariances: applied to S&P features it will
-under-call `crisis` for a mechanical reason that looks like a market judgement.
-Standardize every feature against a rolling window of its *own* series before
-it reaches the HMM, and add a test asserting the fitted state means are within
-tolerance when the pipeline is fitted on each series separately. If the probe
-landed `STOOQ:^SPX`, `calibration` and `publication` are the same index and
-this reduces to a sanity check — which is the main reason to prefer it.
+assume it. This is the central technical risk of the phase**, and it is
+unavoidable now that `calibration` is `FRED:NASDAQ100`: a different, more
+volatile index than `publication`. A Gaussian HMM fitted in raw feature space
+encodes that volatility in its state means and covariances, so applied to S&P
+features it will under-call `crisis` for a mechanical reason that reads as a
+market judgement. Standardize every feature against a rolling window of its
+*own* series before it reaches the HMM, and add a test asserting the fitted
+state means agree within tolerance when the pipeline is fitted on each series
+separately. Had a daily S&P source been available this would have been a mere
+sanity check; it is not, so treat a failure of that test as a blocker rather
+than a tolerance to widen.
 
 - `regime/hmm.py`: 5-state Gaussian HMM (hmmlearn) on the FFD/kinematic
   features; states mapped to the vocabulary in `engines/equity/domain.py`
