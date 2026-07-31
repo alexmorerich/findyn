@@ -83,16 +83,38 @@ describe('artifact storage (FINDYN_V1_SPEC.md §6)', () => {
 describe('artifact routes are behind HMAC', () => {
   beforeEach(clear);
 
+  /**
+   * The claim is "an unsigned request never receives an artifact", not a
+   * specific status code. Both refusals are legitimate and which one you get
+   * depends on the environment: 401 where a secret is configured and the
+   * signature is missing, 503 where the admin surface is disabled because no
+   * secret is set at all — which is exactly CI, and is what an earlier version
+   * of this test failed on for asserting 401 outright.
+   */
+  function assertRefused(res: Response) {
+    expect([401, 503]).toContain(res.status);
+    expect(res.status).not.toBe(200);
+  }
+
   it('refuses an unsigned read', async () => {
-    const res = await SELF.fetch(`https://findyn.test/admin/v1/artifacts/${NAME}/latest`);
-    expect(res.status).toBe(401);
+    assertRefused(await SELF.fetch(`https://findyn.test/admin/v1/artifacts/${NAME}/latest`));
   });
 
   it('refuses an unsigned write', async () => {
-    const res = await SELF.fetch(`https://findyn.test/admin/v1/artifacts/${NAME}/${VERSION}`, {
-      method: 'PUT',
-      body: body(),
-    });
-    expect(res.status).toBe(401);
+    assertRefused(
+      await SELF.fetch(`https://findyn.test/admin/v1/artifacts/${NAME}/${VERSION}`, {
+        method: 'PUT',
+        body: body(),
+      }),
+    );
+  });
+
+  it('never leaks a stored artifact to an unsigned reader', async () => {
+    // The assertion that actually matters: even with something in the bucket,
+    // an unsigned caller gets a refusal rather than the model.
+    await putArtifact(env, NAME, VERSION, body());
+    const res = await SELF.fetch(`https://findyn.test/admin/v1/artifacts/${NAME}/${VERSION}`);
+    assertRefused(res);
+    expect(await res.text()).not.toContain('seed');
   });
 });
