@@ -58,6 +58,19 @@ _SYMBOLS: dict[str, tuple[str, str, str]] = {
 }
 
 
+#: 1900-01-01. A floor rather than the real start: Yahoo clamps to whatever it
+#: holds, so this asks for everything without hard-coding a per-symbol epoch.
+HISTORY_FLOOR_EPOCH = -2208988800
+
+#: Below this many bars the median gap says nothing — a fortnight of daily data
+#: and a fortnight of weekly data are not distinguishable at that length.
+MIN_BARS_FOR_DENSITY_CHECK = 30
+
+#: Daily bars are 1 day apart, 3 across a weekend, so the median is 1. Allowing
+#: 4 leaves room for a holiday-heavy stretch without admitting weekly bars.
+MAX_DAILY_MEDIAN_GAP_DAYS = 4
+
+
 def _require(value: Any, what: str) -> Any:
     if value is None:
         raise ParseError("yahoo", f"response has no {what}")
@@ -154,6 +167,31 @@ class YahooProvider(Provider):
         observations.sort(key=lambda o: o.observation_date)
         return observations
 
+    def _require_daily(self, series_id: str, observations: list[Observation]) -> None:
+        """Refuse a series the API quietly coarsened.
+
+        Daily bars sit one calendar day apart, three across a weekend. The
+        median gap is therefore 1 and a handful of holidays cannot move it.
+        Anything larger means the response is not what ``interval=1d`` asked
+        for, and admitting it would put quarterly closes into a series every
+        consumer downstream reads as daily — a corruption no later check looks
+        for, because nothing downstream re-examines spacing.
+        """
+        if len(observations) < MIN_BARS_FOR_DENSITY_CHECK:
+            return
+        gaps = sorted(
+            (b.observation_date - a.observation_date).days
+            for a, b in zip(observations, observations[1:], strict=False)
+        )
+        median = gaps[len(gaps) // 2]
+        if median > MAX_DAILY_MEDIAN_GAP_DAYS:
+            raise ParseError(
+                self.id,
+                f"{series_id}: asked for interval=1d but the bars are a median "
+                f"{median} days apart across {len(observations)} of them — the API "
+                "answered with a coarser interval than requested",
+            )
+
     def fetch_metadata(self, series_id: str) -> SeriesMetadata:
         symbol = self._symbol(series_id)
         _, title, unit = _SYMBOLS[series_id]
@@ -171,7 +209,12 @@ class YahooProvider(Provider):
             provider=self.id,
             title=str(meta.get("longName") or title),
             frequency="daily",
-            unit=str(meta.get("currency") or unit).lower(),
+            # The catalogue's unit, not Yahoo's ``currency``. Yahoo reports
+            # currency USD for ^GSPC, but an index level is not a price in
+            # dollars — and taking it would disagree with the unit every
+            # observation carries, which the quality engine rejects as a
+            # unit_mismatch rather than guessing which side is right.
+            unit=unit,
             first_observation=first,
             notes=(
                 "Yahoo Finance chart API. No API key; undocumented and unversioned, "
@@ -189,32 +232,37 @@ class YahooProvider(Provider):
         symbol = self._symbol(series_id)
         _, _, unit = _SYMBOLS[series_id]
 
-        # `range=max` is what reaches 1927. Asking for an explicit window
-        # instead of clipping a max fetch keeps a top-up cheap on an API that
-        # rate-limits by IP.
+        # Always an explicit window, never ``range=max``. Asked for max with a
+        # daily interval, the live API answered with 168 bars starting in 1984 —
+        # roughly quarterly, for a series it holds daily from 1927. It does not
+        # report the downgrade; it just returns coarser data under the interval
+        # you asked for. An explicit period1/period2 is honoured. Verified
+        # 2026-07-31, and the density check below is what would catch it
+        # recurring rather than letting quarterly bars enter a daily series.
+        #
+        # Bounds are widened a day at each end before clipping below: the window
+        # is in UTC but the sessions are on the exchange's calendar, and a
+        # boundary session must not fall out of the request that asked for it.
         params: dict[str, str] = {"interval": "1d"}
-        if start is None and end is None:
-            params["range"] = "max"
-        else:
-            # Widened by a day at each end before clipping below: the window is
-            # in UTC but the sessions are on the exchange's calendar, and a
-            # boundary session must not fall out of the request that asked for it.
-            params["period1"] = str(
+        params["period1"] = (
+            str(
                 int(
                     datetime.combine(
                         start - timedelta(days=1), datetime.min.time(), UTC
                     ).timestamp()
                 )
-                if start
-                else 0
             )
-            params["period2"] = str(
-                int(datetime.combine(end + timedelta(days=1), datetime.min.time(), UTC).timestamp())
-                if end
-                else int(datetime.now(UTC).timestamp())
-            )
+            if start
+            else str(HISTORY_FLOOR_EPOCH)
+        )
+        params["period2"] = str(
+            int(datetime.combine(end + timedelta(days=1), datetime.min.time(), UTC).timestamp())
+            if end
+            else int(datetime.now(UTC).timestamp()) + 86400
+        )
 
         observations = self._observations(series_id, unit, self._result(symbol, params))
+        self._require_daily(series_id, observations)
 
         # The API honours the window loosely; enforce it so a caller's cutoff
         # means the same thing here as it does for every other provider.
