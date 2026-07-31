@@ -58,6 +58,7 @@ features:
 # evidence.
 regime:
   # Windows for the dimensionless design matrix, in the units named.
+  trend_months: 3.0
   vol_months: 1.0
   vol_baseline_years: 3.0
   drawdown_years: 1.0

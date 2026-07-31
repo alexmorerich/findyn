@@ -36,8 +36,8 @@ comparability. Each is a ratio of two quantities in the same units, so it is
 already index-independent and there is no normalization left to go wrong:
 
 ===================  =====================================================
-``trend_to_noise``   velocity / realized vol — a Sharpe ratio. Signed, and
-                     zero means zero, so direction survives.
+``trend_to_noise``   trailing annualized return / realized vol — a Sharpe
+                     ratio. Signed, and zero means zero, so direction survives.
 ``trend_change``     one month's change in ``trend_to_noise`` — is the trend
                      firming or rolling over.
 ``vol_ratio``        log(realized vol / its own 3-year rolling median) — the
@@ -116,6 +116,35 @@ DEFAULT_VOL_BASELINE_YEARS = 3.0
 
 #: Lookback for the trailing peak that ``drawdown_sigma`` measures against.
 DEFAULT_DRAWDOWN_YEARS = 1.0
+
+#: Window for a trailing-return trend numerator. **Currently unused** — see below.
+#:
+#: The numerator of ``trend_to_noise`` is the Kalman slope, and that is a known
+#: defect rather than a choice. The
+#: local-linear-trend MLE drives ``sigma2_trend`` to ~1e-12 on every price series
+#: — an index is close to a random walk, so the likelihood is nearly flat in that
+#: parameter and the fit collapses toward a local *level* model. The resulting
+#: slope barely moves: standard deviation 0.05 against 0.28 for a plain trailing
+#: return, and only 0.47 correlated with it.
+#:
+#: Dividing a near-constant numerator by realized volatility does not produce a
+#: trend-to-noise ratio, it produces an inverse-volatility feature wearing a
+#: trend's name. The consequence was visible and wrong: the *lowest-volatility*
+#: state had the highest ``trend_to_noise``, so it was labelled the most bullish,
+#: and a quiet rising market at all-time highs was published as ``bear``.
+#:
+#: The obvious repair — a trailing 3-month annualized return — was implemented
+#: and reverted. It fixes today's label (``normal_expansion`` rather than
+#: ``bear``) and it **breaks the cross-index transfer**: ``crisis``'s
+#: ``trend_to_noise`` mean moves 3.04 between the S&P and NASDAQ fits against a
+#: tolerance of 1.2, so a model fitted on one could no longer be applied to the
+#: other. It also collapsed in-sample episode coverage (2008 from 100% to 22%).
+#:
+#: So both candidates are wrong in different places and the feature set is not
+#: settled. This constant is kept, unused, so the alternative is one line away
+#: for whoever picks it up; ``docs/backtests/equity-open-issues.md`` §3b is the
+#: full record and the reason no ``AssetState`` is published today.
+DEFAULT_TREND_MONTHS = 3.0
 
 #: Rolling windows produce nothing until this fraction of the window has filled.
 MIN_WINDOW_FRACTION = 0.5
@@ -205,6 +234,7 @@ def build_design(
     vol_months: float = DEFAULT_VOL_MONTHS,
     vol_baseline_years: float = DEFAULT_VOL_BASELINE_YEARS,
     drawdown_years: float = DEFAULT_DRAWDOWN_YEARS,
+    trend_months: float = DEFAULT_TREND_MONTHS,
 ) -> RegimeDesign:
     """Assemble the HMM inputs for one series, in dimensionless units.
 
@@ -222,6 +252,12 @@ def build_design(
     # A zero rolling std is a flat stretch, not an infinitely good Sharpe.
     safe_vol = vol.replace(0.0, np.nan)
 
+    # The Kalman slope, deliberately — and known to be the weaker of two bad
+    # options. See DEFAULT_TREND_MONTHS for the whole argument: the slope is
+    # near-frozen and this ratio behaves partly as an inverse-volatility
+    # feature, but the trailing-return alternative breaks the cross-index
+    # transfer that the fitted model depends on. Neither is settled.
+    _ = trend_months
     trend_to_noise = (features.frame["velocity"] / safe_vol).rename("trend_to_noise")
 
     baseline_window = max(int(round(vol_baseline_years * periods)), 2)

@@ -364,6 +364,7 @@ class EquityEngine(AssetEngine):
             vol_months=float(block.get("vol_months", 1.0)),
             vol_baseline_years=float(block.get("vol_baseline_years", 3.0)),
             drawdown_years=float(block.get("drawdown_years", 1.0)),
+            trend_months=float(block.get("trend_months", 3.0)),
         )
 
     def _stored_params(self) -> dict[str, FrozenFeatureParams]:

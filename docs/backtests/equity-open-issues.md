@@ -74,6 +74,57 @@ multi-output calibration, would.
 
 ---
 
+## 3b. The regime feature set is not settled — this is the biggest open item
+
+**Status:** one bug fixed, a regression introduced, neither finished.
+
+`trend_to_noise` originally divided the **Kalman slope** by realized volatility.
+The local-linear-trend MLE drives `sigma2_trend` to ~1e-12 on every price series
+— an index is close to a random walk, so the likelihood is flat in that
+parameter — and the resulting slope barely moves: standard deviation 0.05
+against 0.28 for a plain trailing return, correlated only 0.47 with it.
+
+Dividing a near-constant numerator by volatility does not give a trend-to-noise
+ratio. It gives an **inverse-volatility feature wearing a trend's name**, and the
+consequence was visible and indefensible: the lowest-volatility state had the
+highest `trend_to_noise`, so the labelling rule called it the most bullish, and a
+quiet rising market at all-time highs was published as **`bear` with 97%
+confidence**.
+
+The numerator is now a trailing 3-month annualized return. Today's state becomes
+`normal_expansion`, which is right, and the states are monotone in return with
+`bull_expansion` at +34.3%/10.7% and `crisis` at −13.3%/23.2%.
+
+**But in-sample episode coverage regressed badly.** Share of each episode called
+bear-or-crisis, on the 1927+ S&P:
+
+| Episode | Coverage |
+|---|---:|
+| 1929 | 16% |
+| 1931 | 76% |
+| 1974 | 86% |
+| 1987 | 18% |
+| 2000 | 79% |
+| 2008 | **22%** |
+| 2020 | 23% |
+| 2022 | 39% |
+
+2008 at 22% is far worse than the 100% the earlier NASDAQ-fitted configuration
+achieved, and 2023 — a recovery year — shows 55%.
+
+So the current state is: the *live* label is sensible and the *historical*
+behaviour is not. The committed backtest report predates this change and
+describes the earlier configuration.
+
+**This needs to be settled before sub-milestone C.** The RII and the crash
+decomposition both consume the regime posterior, and building them on a feature
+set this unstable would bake the problem into three more published numbers.
+Likely direction: the single 3-month trend window is too long for 1987/2020 and
+too short for 1931/1974, so a multi-horizon trend feature, or separating the
+"fast crash" and "slow bear" discriminators, is the obvious next thing to try.
+
+---
+
 ## 4. The engine does not detect a fast crash
 
 **Status:** structural, and a spec non-goal — but it should be said plainly.
