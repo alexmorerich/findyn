@@ -35,12 +35,24 @@ class ProviderError(Exception):
 
     ``retryable`` decides whether the resilience layer should back off and try
     again or give up immediately. Retrying a bad API key just burns quota.
+
+    ``status_code`` carries the HTTP status where one exists, so an adapter can
+    react to a specific upstream rejection (FRED answers 400, not 404, for a
+    series that exists in FRED but has no ALFRED vintage archive).
     """
 
-    def __init__(self, provider: str, message: str, *, retryable: bool = True) -> None:
+    def __init__(
+        self,
+        provider: str,
+        message: str,
+        *,
+        retryable: bool = True,
+        status_code: int | None = None,
+    ) -> None:
         super().__init__(f"[{provider}] {message}")
         self.provider = provider
         self.retryable = retryable
+        self.status_code = status_code
 
 
 class RateLimitError(ProviderError):

@@ -21,6 +21,7 @@ from findynamics.data.providers.base import (
     Observation,
     ParseError,
     Provider,
+    ProviderError,
     SeriesMetadata,
 )
 from findynamics.data.providers.resilience import Transport
@@ -154,26 +155,37 @@ class FredProvider(Provider):
             notes=(str(entry.get("notes")) or None) if entry.get("notes") else None,
         )
 
-    def vintage_dates(self, series_id: str) -> list[date]:
+    def vintage_dates(self, series_id: str) -> list[date] | None:
         """Every date on which this series was issued or reissued.
 
         Needed before the observations call, because the size of the real-time
         window is what FRED rejects on — and it will not tell us how wide a
         window is safe without being asked.
+
+        Returns ``None`` for a series that exists in FRED but not in ALFRED
+        (SP500 is one: its license keeps the archive out). FRED signals that
+        with HTTP 400 on this endpoint — and would 400 the observations call
+        too if it carried any real-time window — so ``None`` tells the caller
+        to fetch without one.
         """
         collected: list[date] = []
         offset = 0
         while True:
-            payload = self._get(
-                "series/vintagedates",
-                {
-                    "series_id": self._bare(series_id),
-                    "realtime_start": REALTIME_START,
-                    "realtime_end": REALTIME_END,
-                    "limit": str(VINTAGE_PAGE),
-                    "offset": str(offset),
-                },
-            )
+            try:
+                payload = self._get(
+                    "series/vintagedates",
+                    {
+                        "series_id": self._bare(series_id),
+                        "realtime_start": REALTIME_START,
+                        "realtime_end": REALTIME_END,
+                        "limit": str(VINTAGE_PAGE),
+                        "offset": str(offset),
+                    },
+                )
+            except ProviderError as err:
+                if err.status_code == 400 and offset == 0:
+                    return None
+                raise
             page = payload.get("vintage_dates") or []
             for raw in page:
                 try:
@@ -225,12 +237,20 @@ class FredProvider(Provider):
             base["observation_end"] = end.isoformat()
 
         windows: list[tuple[str, str] | None]
-        if self.use_vintages:
-            windows = list(self._vintage_windows(self.vintage_dates(series_id)))
+        vintages = self.vintage_dates(series_id) if self.use_vintages else None
+        if vintages is None:
+            # Either vintages were disabled or the series is FRED-only. The
+            # plain response stamps every row's realtime_start with today, which
+            # downstream (data/vintages.py) reads as a bulk-seeding artifact and
+            # replaces with the configured publication lag — so a FRED-only
+            # series still gets usable point-in-time release dates.
+            if self.use_vintages:
+                log.info("%s: no ALFRED archive; fetching current values only", series_id)
+            windows = [None]
+        else:
+            windows = list(self._vintage_windows(vintages))
             if len(windows) > 1:
                 log.info("%s: %d vintage windows", series_id, len(windows))
-        else:
-            windows = [None]
 
         parsed: list[tuple[date, date, float]] = []
         for window in windows:

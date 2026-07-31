@@ -68,7 +68,7 @@
   }
 
   // Secrets (set via `wrangler secret put <NAME>`, never committed — see .dev.vars.example):
-  //   FRED_API_KEY, BLS_API_KEY, BEA_API_KEY, ALPHAVANTAGE_API_KEY, ADMIN_HMAC_SECRET
+  //   FRED_API_KEY, BLS_API_KEY, BEA_API_KEY, ADMIN_HMAC_SECRET
 
   // Static assets for the Astro dashboard are wired at M5, once dashboard/dist exists:
   //   "assets": { "directory": "../dashboard/dist", "binding": "ASSETS",

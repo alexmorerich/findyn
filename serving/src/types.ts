@@ -17,7 +17,6 @@ declare global {
       FRED_API_KEY?: string;
       BLS_API_KEY?: string;
       BEA_API_KEY?: string;
-      ALPHAVANTAGE_API_KEY?: string;
       /** Shared secret for HMAC-signed write-back from the Python compute plane. */
       ADMIN_HMAC_SECRET?: string;
     }

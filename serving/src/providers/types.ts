@@ -2,19 +2,13 @@
  * Provider adapter contract — FINDYN_V1_SPEC.md §5.1.
  *
  * Every external source is an isolated adapter behind these interfaces, with a
- * per-provider rate limiter and circuit breaker. Yahoo Finance is a fallback
- * only and must remain deletable without touching anything outside its own file.
+ * per-provider rate limiter and circuit breaker. The union names only providers
+ * with a working adapter (compute mirrors this in core/config.py
+ * VALID_PROVIDERS); a source we merely plan to support is added when its
+ * adapter lands, not before.
  */
 
-export type ProviderId =
-  | 'fred'
-  | 'shiller'
-  | 'bls'
-  | 'bea'
-  | 'treasury'
-  | 'alphavantage'
-  | 'stooq'
-  | 'yahoo';
+export type ProviderId = 'fred' | 'shiller' | 'bls' | 'bea' | 'stooq';
 
 /** One macro observation, carrying its point-in-time release date (§14.1). */
 export interface MacroObservation {

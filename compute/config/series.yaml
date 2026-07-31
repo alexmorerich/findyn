@@ -173,33 +173,27 @@ engines:
 
   equity:
     # The S&P500 price backbone — FinEquity's private input (FINDYN_V1_SPEC.md).
+    # Sources verified live 2026-07-31; every provider named here has a working
+    # adapter (an unimplemented one now fails config load, not the first fetch).
     series:
-      # Daily incremental updates. Free tier is 25 requests/day — daily only, never backfill.
-      primary:
-        provider: alphavantage
-        symbol: SPY
-        frequency: daily
-        publication_lag_days: 0
-      # Bulk daily history for backfill (free, no key).
-      backfill:
-        provider: stooq
-        symbol: "^spx"
-        frequency: daily
-        publication_lag_days: 0
-      # Deep monthly history, 1871+.
-      deep_history:
-        provider: shiller
-        field: real_price
-        frequency: monthly
-        publication_lag_days: 30
-      fallback:
-        # Unofficial and unstable — isolated adapter, deletable without touching callers (§5.1).
-        provider: yahoo
-        symbol: "^GSPC"
-        frequency: daily
-        publication_lag_days: 0
+      # Daily backbone. FRED's SP500 is license-limited to a rolling ~10y window
+      # (2016-08 onward) and exists in FRED only, not ALFRED — the adapter
+      # detects that and fetches without a real-time window; release dates come
+      # from this lag via the vintage repair (data/vintages.py).
+      primary:      {id: "FRED:SP500", provider: fred, frequency: daily, publication_lag_days: 1}
+      # Long daily proxy for regime/crisis calibration: NASDAQ100 runs from 1986
+      # (verified: 11,994 obs), so 1987, 2000, 2008 and 2020 are all in-sample —
+      # which the 10y SP500 window alone cannot offer.
+      regime_proxy: {id: "FRED:NASDAQ100", provider: fred, frequency: daily, publication_lag_days: 1}
+      # Bulk daily S&P history, free and keyless — but the endpoint bot-filters
+      # some egresses (see providers/stooq.py); where it answers it is the daily
+      # deep history, where it does not the roles above carry the engine.
+      backfill:     {id: "STOOQ:^SPX", provider: stooq, frequency: daily, publication_lag_days: 0}
+      # Deep monthly history, 1871+. Nominal, matching the daily closes above;
+      # SHILLER:REAL_PRICE exists for consumers that want the deflated series.
+      deep_history: {id: "SHILLER:NOMINAL_PRICE", provider: shiller, frequency: monthly, publication_lag_days: 30}
 
 # Cached in KV with a short TTL for the dashboard's live tiles (§6).
 realtime_cache:
   ttl_seconds: 900
-  series: ["FRED:VIXCLS", "FRED:DGS10", "PRICE:SPY"]
+  series: ["FRED:VIXCLS", "FRED:DGS10", "FRED:SP500"]
