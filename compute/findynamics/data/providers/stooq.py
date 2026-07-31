@@ -22,6 +22,7 @@ import csv
 import logging
 from datetime import date, datetime
 from io import StringIO
+from pathlib import Path
 
 from findynamics.data.providers.base import (
     BotChallengeError,
@@ -36,7 +37,10 @@ log = logging.getLogger("findynamics.data.providers.stooq")
 
 BASE_URL = "https://stooq.com/q/d/l/"
 
-EXPECTED_HEADER = ["Date", "Open", "High", "Low", "Close", "Volume"]
+#: Columns every Stooq daily CSV carries. ``Volume`` follows on instrument
+#: exports but is absent on index exports (^SPX has no volume to report), so it
+#: is not required — the parser reads ``Date`` and ``Close`` and nothing else.
+REQUIRED_HEADER = ["Date", "Open", "High", "Low", "Close"]
 
 #: symbol -> (series_id, human title, unit)
 _SYMBOLS: dict[str, tuple[str, str, str]] = {
@@ -103,7 +107,7 @@ class StooqProvider(Provider):
         except StopIteration:
             raise ParseError(self.id, "empty CSV response") from None
 
-        if header[: len(EXPECTED_HEADER)] != EXPECTED_HEADER:
+        if header[: len(REQUIRED_HEADER)] != REQUIRED_HEADER:
             raise ParseError(self.id, f"unexpected CSV header: {header}")
 
         close_idx = header.index("Close")
@@ -160,3 +164,49 @@ class StooqProvider(Provider):
         if end is not None:
             observations = [o for o in observations if o.observation_date <= end]
         return observations
+
+
+class StooqFileProvider(StooqProvider):
+    """The same CSV, read from disk instead of fetched.
+
+    The proof-of-work challenge above blocks every automated egress available to
+    this project — a developer network and GitHub's runners both, verified. A
+    browser passes it, because passing it is what a browser is for, so the one
+    remaining route to Stooq's daily history is a person downloading the file
+    and pointing this at it.
+
+    That is a reasonable trade for this particular series: daily index history
+    before 2016 is fixed, so it is fetched once and never again. It is a bad
+    trade for anything that needs refreshing, which is why this is a deliberate
+    ``--from-file`` argument rather than a fallback the daily job could reach.
+
+    Everything downstream is unchanged — same parser, same release-date
+    convention, same quality checks — so a file-sourced backfill and a network
+    one produce identical rows.
+    """
+
+    def __init__(self, path: Path) -> None:
+        # Deliberately no transport: there is nothing to rate-limit or retry,
+        # and constructing one would imply this can reach the network.
+        self.path = path
+
+    def _download(self, symbol: str) -> str:
+        try:
+            text = self.path.read_text(encoding="utf-8", errors="replace")
+        except OSError as err:
+            raise ParseError(self.id, f"cannot read {self.path}: {err}") from err
+
+        if looks_like_bot_challenge(text):
+            raise BotChallengeError(
+                self.id,
+                f"{self.path} contains the bot-challenge page, not CSV — the browser "
+                "saved the interstitial. Open the download URL in a real browser tab, "
+                "let it finish, and save the file it offers.",
+            )
+        return text
+
+    def fetch_metadata(self, series_id: str) -> SeriesMetadata:
+        metadata = super().fetch_metadata(series_id)
+        return SeriesMetadata(
+            **{**metadata.__dict__, "notes": f"stooq.com daily CSV, ingested from {self.path.name}"}
+        )
