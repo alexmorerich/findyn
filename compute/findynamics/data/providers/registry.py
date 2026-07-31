@@ -37,6 +37,7 @@ from findynamics.data.providers.resilience import (
 )
 from findynamics.data.providers.shiller import ShillerProvider
 from findynamics.data.providers.stooq import StooqProvider
+from findynamics.data.providers.yahoo import YahooProvider
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,9 @@ QUOTAS: Mapping[str, Quota] = {
     "bls": Quota(5, 0.05, 1.0, 4, 120.0, 3, "BLS v2 allows 500 req/day with a key"),
     "bea": Quota(10, 0.5, 0.5, 4, 120.0, 3, "BEA allows 100 req/min, 100MB/day"),
     "engine_output": Quota(20, 5.0, 0.0, 3, 30.0, 2, "our own Worker; no published quota"),
+    # Undocumented and IP-throttled: a 429 is routine rather than exceptional,
+    # so this is the most conservative pacing of any source here.
+    "yahoo": Quota(2, 0.2, 2.0, 3, 300.0, 3, "unofficial; throttles hard by source IP"),
     "mock": Quota(1000, 1000.0, 0.0, 100, 1.0, 1, "no network"),
 }
 
@@ -73,12 +77,12 @@ KEY_ENV = {
 }
 
 #: Providers that reach the network and therefore need a transport.
-NETWORK_PROVIDERS = frozenset({"fred", "shiller", "stooq", "bls", "bea", "engine_output"})
+NETWORK_PROVIDERS = frozenset({"fred", "shiller", "stooq", "bls", "bea", "engine_output", "yahoo"})
 
 #: Providers usable with no credential at all. ``engine_output`` needs no key but
 #: does need to be told where the serving plane is; when it is not, it reports no
 #: observations and the consuming engine degrades (see its module docstring).
-KEYLESS_PROVIDERS = frozenset({"shiller", "stooq", "engine_output"})
+KEYLESS_PROVIDERS = frozenset({"shiller", "stooq", "engine_output", "yahoo"})
 
 #: The network adapters, published by name. ``mock`` is deliberately absent:
 #: reaching synthetic data must stay a deliberate act through ``build_provider``
@@ -90,6 +94,7 @@ for _name, _cls in (
     ("bls", BlsProvider),
     ("bea", BeaProvider),
     ("engine_output", PublishedOutputProvider),
+    ("yahoo", YahooProvider),
 ):
     register_provider(_name, _cls)
 
