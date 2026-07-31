@@ -77,7 +77,13 @@ log = logging.getLogger("findynamics.engines.equity")
 
 #: The model version before the calibration tag is appended. The published
 #: version is always ``<base>+cal.<slug>`` (see :meth:`EquityEngine.model_version`).
-MODEL_VERSION_BASE = "equity-1.0.0"
+#:
+#: 1.1.0: the artifact carries the fitted EVT tail, so a daily run inherits it
+#: instead of publishing the flagged base rate (open issue 16). Bumped rather
+#: than overwritten because R2 refused the write — the 1.0.0 artifact produced a
+#: different `p_shock` on the same inputs, which makes it a different model, and
+#: every state stamped 1.0.0 is still a checkable claim about that one.
+MODEL_VERSION_BASE = "equity-1.1.0"
 
 #: Artifact document name under ``compute/artifacts/``.
 ARTIFACT_NAME = "equity"
