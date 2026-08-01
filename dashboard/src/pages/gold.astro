@@ -1,0 +1,90 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="FinGold"
+  description="Gold's regime, hedge score, crisis premium and driver panel — real rates, the dollar, financial stress and equity instability — from the FinDynamics gold engine."
+  eyebrow="Asset engine"
+  heading="FinGold — trust and crisis protection"
+  intro="Gold has no cash flow, so there is nothing here to value. This engine models drivers instead: what gold costs to hold, what it is quoted in, and what it is bought against. Everything on this page is read from the live API by your browser."
+>
+  <section class="panel" aria-labelledby="state-h">
+    <div class="panel__head">
+      <h2 id="state-h">Current state</h2>
+      <span class="panel__note">/api/v1/assets/gold/state</span>
+    </div>
+    <div id="gold-state"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="regime-h">
+    <div class="panel__head">
+      <h2 id="regime-h">Regime</h2>
+      <span class="panel__note">/api/v1/assets/gold/history?metric=regime_posterior_*</span>
+    </div>
+    <p class="prose">
+      Three states, published as a distribution rather than a winner &mdash; a 0.51/0.49 split
+      between a hedge bid and a rate headwind is a different statement from a 0.95 hedge bid, and a
+      badge alone cannot tell them apart. They are not degrees of one thing either: 1981&ndash;82 was
+      a rate headwind and a crisis at the same time.
+    </p>
+    <p class="prose">
+      The posterior comes from two blocks. A Markov regime-switching model on monthly gold returns,
+      fitted on an expanding window and frozen between refits, says whether the return process is in
+      its violent state. Two logistic gates on the driver panel then say whether that violence is
+      accompanied by financial stress (a crisis bid) and whether real rates and the dollar are
+      working against gold (a rate headwind). The chain alone cannot do the second job: gold&rsquo;s
+      2022 returns averaged +0.04% a month with a 3.6% standard deviation &mdash; statistically
+      indistinguishable from a quiet market &mdash; while the real 10-year yield rose 250bp.
+    </p>
+    <div id="gold-regime" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="hedge-h">
+    <div class="panel__head">
+      <h2 id="hedge-h">Hedge score</h2>
+      <span class="panel__note">/api/v1/assets/gold/history?metric=hedge_score</span>
+    </div>
+    <p class="prose">
+      0&ndash;100, answering a conditional question: on the days equities are falling, what does gold
+      do? Unconditional gold&ndash;equity correlation is close to zero and has been for decades,
+      which sounds like a perfect hedge and means almost nothing &mdash; a hedge is not an asset
+      that is uncorrelated on average, it is one that is negatively correlated when it matters. So
+      the correlation is measured only over days the equity index is more than 5% below its trailing
+      peak, then blended 60/40 with the regime posterior, which is the forward-looking half.
+    </p>
+    <div id="gold-hedge" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="drivers-h">
+    <div class="panel__head">
+      <h2 id="drivers-h">Drivers</h2>
+      <span class="panel__note">AssetState.components</span>
+    </div>
+    <p class="prose">
+      The real rate is the only genuine cost of holding gold, and the 12-month change is the driver
+      that separates 2013 and 2022 from 2011. Before TIPS breakevens existed (2003) it falls back to
+      an ex-post rate &mdash; nominal 10y minus trailing CPI &mdash; which is a different quantity
+      and is flagged per date rather than blended. A driver that is absent from the information set
+      is shown as absent, never as zero.
+    </p>
+    <div id="gold-drivers" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="signals-h">
+    <div class="panel__head">
+      <h2 id="signals-h">Signals</h2>
+      <span class="panel__note">AssetState.signals</span>
+    </div>
+    <p class="prose">
+      Direction is the read on gold, not on the direction of the number itself: a rising real rate is
+      a headwind even though the number went up, and an elevated crisis premium is supportive of gold
+      even though it is bad news for almost everything else.
+    </p>
+    <div id="gold-signals" style="margin-top:0.85rem"></div>
+  </section>
+</Base>
+
+<script>
+  import '../scripts/gold';
+</script>

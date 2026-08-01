@@ -1,2 +1,172 @@
-# FinGold — trust and crisis protection (Phase 4). Not built yet.
-enabled: false
+# FinGold — trust and crisis protection (Phase 4).
+#
+# Gold has no cash flow, so nothing here is a valuation parameter and nothing
+# ever will be. Every block below configures a *driver* model: what gold costs
+# to hold (real rates), what it is quoted in (the dollar), what it is bought
+# against (financial stress, equity instability), and how violently it moves.
+#
+# Every threshold the model branches on lives in this file. A rule that only
+# exists in Python is a rule nobody can recalibrate without a deploy.
+enabled: true
+
+# --- The driver panel (engines/gold/drivers.py) ----------------------------
+drivers:
+  # Lookback for the real-rate 12-month change and the dollar trend, in
+  # OBSERVATIONS rather than calendar days: the panel is built on the gold
+  # fixing calendar, so 252 is a year of the dates this engine actually sees.
+  trend_days: 252
+  # Expanding z-scores need a real sample before they mean anything. Three years
+  # of daily observations; below that the standard deviation is estimated from
+  # too few independent moves and the score swings on its own denominator.
+  z_min_observations: 756
+  # Expanding z-scores are clipped here. 1980 is real and must not be
+  # winsorized out of the record, but it must also not set the scale for the
+  # next forty years.
+  z_clip: 4.0
+  # Months of trailing CPI behind the ex-post real rate used before TIPS
+  # breakevens exist (2003). See drivers.py on why that splice is flagged per
+  # date rather than blended.
+  inflation_months: 12
+
+# --- The regime model (engines/gold/regime.py) -----------------------------
+#
+# Read regime.py's module docstring before touching anything here. The short
+# version: the Markov chain supplies the crisis axis and the two gates below
+# supply the carry axis, because gold's monthly returns in 2022 are
+# statistically indistinguishable from a quiet market and no likelihood over
+# returns alone will ever call that a rate headwind.
+regime:
+  # 2 or 3. Three states fit the return process better and the third is not
+  # wasted: quiet, normal and violent are all visited.
+  k_regimes: 3
+  # Months required before the chain is fitted at all. Twenty years: a
+  # three-state switching model on ten is estimating more parameters than it has
+  # decades to estimate them from.
+  min_observations: 240
+  # EM restarts and iteration caps. Raising search_reps past ~8 changed nothing
+  # in testing: the likelihood surface has one basin the restarts all find.
+  search_reps: 8
+  em_iter: 50
+  maxiter: 250
+  # Fixed so a refit on the same data lands in the same place; the replay test
+  # depends on it. Changing this is a model change, not a tuning knob.
+  seed: 20260801
+
+  # Block 2 — the driver gates. Set to false to publish the raw Markov posterior
+  # instead, which is how the test suite shows what the gates are worth rather
+  # than taking the docstring's word for it.
+  driver_gates: true
+  # Logistic gate on standardized financial stress: crisis_bid requires the
+  # return process to be violent AND conditions to be tight. Violence with calm
+  # conditions is a positioning washout (April 2013), not a crisis.
+  stress_weight: 2.0
+  stress_offset: 0.5
+  # Logistic gate on the carry environment.
+  carry_weight: 2.0
+  carry_offset: 0.35
+  # How the carry gate splits between the real-rate impulse and the dollar. Real
+  # rates dominate because they are the mechanism; the dollar is a quotation
+  # effect that usually moves with them.
+  carry_rate_share: 0.7
+  carry_usd_share: 0.3
+
+# --- Jump detection (engines/gold/jumps.py) --------------------------------
+jumps:
+  # Observations in the local bipower volatility window. A quarter: long enough
+  # for the bipower sum to be stable, short enough to track one volatility
+  # regime rather than averaging two.
+  window: 63
+  # Gumbel test size. 1% rather than 5% because this feeds a crisis premium, and
+  # a detector firing on one ordinary day in twenty would make the premium a
+  # measure of how many days there are.
+  alpha: 0.01
+  # Trailing window the intensity is counted over, in observations.
+  intensity_window: 252
+  min_observations: 126
+
+# --- The crisis premium ----------------------------------------------------
+crisis:
+  # Jumps per year that map the premium's base term to 1.0. Calibrated on the
+  # detector's own output over 1968-2026 rather than guessed: the median
+  # trailing intensity is 1/yr, the 90th percentile 4 and the 99th 7. Six puts
+  # March 2020 (peak 4/yr) around two thirds before the stress lift and reserves
+  # 1.0 for something genuinely without precedent.
+  #
+  # Note this is intensity relative to LOCAL volatility, which is why 2008 scores
+  # lower than 2020 here: gold's volatility in late 2008 was so high for so long
+  # that few individual days stood out against it. That is the detector working
+  # as designed — 2008's crisis reaches the state through the stress lift and
+  # through the regime, not through the jump count.
+  intensity_reference: 6.0
+  # How much elevated financial stress lifts the premium above what the jumps
+  # alone say. Only positive stress lifts it — calm conditions are not evidence
+  # that the jumps did not happen.
+  stress_weight: 0.5
+
+# --- The hedge score (engines/gold/hedge.py) -------------------------------
+hedge:
+  # Trailing window for the equity peak a drawdown is measured from.
+  peak_window: 252
+  # How far below that peak counts as a drawdown. 5% rather than 10%: at 10%
+  # there are stretches of years with no qualifying day at all, and a hedge
+  # score that goes blank through every calm market is not a hedge score.
+  drawdown_threshold: 0.05
+  # Trailing window the conditional correlation is measured over (two years).
+  correlation_window: 504
+  # Drawdown days required inside that window before a correlation is quoted at
+  # all. A correlation over eleven observations is noise with a decimal point.
+  min_drawdown_days: 40
+  # Convex blend of the realized conditional correlation and the regime
+  # posterior. Must sum to 1.0 — the engine refuses to load otherwise, because
+  # anything else leaves the 0-100 range the score claims to be on.
+  correlation_weight: 0.6
+  regime_weight: 0.4
+
+# --- Risk score ------------------------------------------------------------
+risk:
+  # Annualized realized volatility that maps to 100 on the shared axis. 30% is
+  # roughly gold in 1980 and in the worst of 2008. Calibrated on the asset: a
+  # scale shared with equities would put gold's ordinary state near zero and say
+  # nothing useful about it.
+  vol_reference_pct: 30.0
+  # Detected jumps per year that map the jump term to 1.0. Same calibration as
+  # crisis.intensity_reference — see the note there.
+  jump_intensity_reference: 6.0
+  # Volatility carries the ordinary risk; the jump term carries the part that
+  # arrives in three sessions and that a 252-day standard deviation reports
+  # weeks late.
+  vol_weight: 0.7
+  jump_weight: 0.3
+  # Used when history is too short to estimate volatility at all.
+  vol_fallback: 0.5
+
+# --- Confidence ------------------------------------------------------------
+confidence:
+  # Deliberately well below 1. The published expected_return is a
+  # regime-conditional historical mean and the regime is half a fitted chain and
+  # half two configured gates; neither earns a confidence of 0.9, and the
+  # portfolio layer weights by this number.
+  ceiling: 0.7
+  missing_driver_penalty: 0.05
+  no_conditional_correlation_penalty: 0.1
+  ex_post_real_rate_penalty: 0.05
+  no_jump_detector_penalty: 0.05
+
+# --- Signal thresholds -----------------------------------------------------
+signals:
+  hedge_score_good: 60.0
+  hedge_score_poor: 40.0
+  # Percentage points of 12-month real-rate change below which the move is not
+  # worth calling a headwind in either direction.
+  real_rate_material_pp: 0.25
+  crisis_premium_elevated: 0.4
+
+outputs:
+  # The NIGHTLY window: how far back jobs.daily republishes the per-date series.
+  # Ten years — everything older is an unchanged upsert, so a longer nightly
+  # window writes a century every night to add one row.
+  history_days: 3650
+  # The BACKFILL window, used only by `jobs.daily --full-history`. Reaches past
+  # 1968-04-01, the start of the LBMA record, so one deliberate run puts the
+  # whole history in D1 and /gold can chart it.
+  backfill_history_days: 40000

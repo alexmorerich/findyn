@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 import httpx
 
+from findynamics.core.retry import is_transient_http, retry_call
 from findynamics.core.signing import sign
 
 LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
@@ -46,7 +47,19 @@ sign_payload = sign
 
 
 def write_back(payload: dict[str, Any], *, dry_run: bool = False) -> None:
-    """POST results to the serving plane's HMAC-authenticated admin endpoint (§6)."""
+    """POST results to the serving plane's HMAC-authenticated admin endpoint (§6).
+
+    Retries transient failures. A daily run splits into a dozen or more signed
+    requests, and a connection dropped on the seventh leaves the night's charts
+    with a hole in them until tomorrow — which is what happened publishing P4,
+    twice, on the same network that then completed every chunk on a retry.
+
+    The signature is computed once and reused across attempts on purpose: it
+    covers ``{timestamp}.{body}`` and the body does not change, so re-signing
+    would only move the timestamp and risk drifting outside the server's window
+    on a long backoff. ``httpx.post`` opens and closes a connection per call,
+    which is what a retry after a half-open socket needs.
+    """
     log = logging.getLogger("findynamics.writeback")
     body = json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
@@ -60,17 +73,28 @@ def write_back(payload: dict[str, Any], *, dry_run: bool = False) -> None:
         raise RuntimeError("FINDYN_ADMIN_URL and ADMIN_HMAC_SECRET must be set")
 
     timestamp, signature = sign_payload(secret, body)
-    response = httpx.post(
-        endpoint,
-        content=body,
-        headers={
-            "content-type": "application/json",
-            "x-findyn-timestamp": timestamp,
-            "x-findyn-signature": signature,
-        },
-        timeout=60.0,
+
+    def post() -> httpx.Response:
+        response = httpx.post(
+            endpoint,
+            content=body,
+            headers={
+                "content-type": "application/json",
+                "x-findyn-timestamp": timestamp,
+                "x-findyn-signature": signature,
+            },
+            timeout=60.0,
+        )
+        # Inside the retried operation, so a 5xx is retried and a 4xx — a bad
+        # signature, a rejected payload — fails immediately and says why.
+        response.raise_for_status()
+        return response
+
+    response = retry_call(
+        post,
+        retry_on=is_transient_http,
+        description=f"write-back of {len(body)} bytes",
     )
-    response.raise_for_status()
     log.info("wrote back %d bytes -> %s", len(body), response.status_code)
 
 

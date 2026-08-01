@@ -57,6 +57,18 @@ export const MONEY_REGIMES = ['abundant', 'normal', 'tightening', 'stressed'] as
 export type MoneyRegime = (typeof MONEY_REGIMES)[number];
 
 /**
+ * Gold-regime vocabulary, owned by findynamics/engines/gold/domain.py.
+ *
+ * Why gold is being bid, or why it is not. Not degrees of one thing: a rate
+ * headwind and a crisis bid can arrive in the same month (1981-82 had both),
+ * which is why the state is published as a posterior over all three rather than
+ * as a winner. Ordered least-to-most eventful, because `engine_output` publishes
+ * the state as its index here (`regime_code`).
+ */
+export const GOLD_REGIMES = ['hedge_bid', 'carry_headwind', 'crisis_bid'] as const;
+export type GoldRegime = (typeof GOLD_REGIMES)[number];
+
+/**
  * Standard discount horizons — the tenors `D(t, h)` is published for.
  *
  * Distinct from HORIZONS, which are *forecast* horizons. These are points on a

@@ -1214,6 +1214,18 @@ a.enginecard__title {
 .legend__swatch--bear { background: #9a5236; }
 .legend__swatch--crisis { background: #8f3b3b; }
 
+/* FinGold's three states. Same mechanism as the five above and deliberately not
+   the same hues: gold's regimes are not a risk-on axis, so borrowing the equity
+   ramp would imply an ordering that does not exist. `crisis_bid` shares the
+   warning red because it is the same event seen from the other side. */
+.chart .regimeband--hedge_bid { fill: #3f6f8f; }
+.chart .regimeband--carry_headwind { fill: #8a7433; }
+.chart .regimeband--crisis_bid { fill: #8f3b3b; }
+
+.legend__swatch--hedge_bid { background: #3f6f8f; }
+.legend__swatch--carry_headwind { background: #8a7433; }
+.legend__swatch--crisis_bid { background: #8f3b3b; }
+
 /* Transition dials */
 .dialrow {
   display: flex;

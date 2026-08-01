@@ -37,6 +37,12 @@ const REGIME_TONE: Record<string, Tone> = {
   normal: 'idle',
   tightening: 'warn',
   stressed: 'bad',
+  // gold — why it is being bid, or why it is not. `hedge_bid` is `idle` rather
+  // than `ok` on purpose: it is the ordinary state, and colouring the common
+  // case green would make the panel read as an all-clear most of the time.
+  hedge_bid: 'idle',
+  carry_headwind: 'warn',
+  crisis_bid: 'bad',
 };
 
 export function regimeTone(regime: string | null): Tone {

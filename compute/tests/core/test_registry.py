@@ -211,7 +211,7 @@ def test_load_engines_reports_what_config_enabled():
     from findynamics.engines import load_engines
 
     # Idempotent by design — several jobs call it in one process.
-    assert load_engines() == load_engines() == ("money", "rates", "equity")
+    assert load_engines() == load_engines() == ("money", "rates", "equity", "gold")
 
 
 def test_importing_an_engine_package_is_what_registers_it():
@@ -241,8 +241,8 @@ def test_importing_an_engine_package_is_what_registers_it():
     )
 
     assert probe.returncode == 0, probe.stderr
-    # P1 ships rates, P2 money, P3-A equity. Anything else here is scope creep.
-    assert probe.stdout.strip() == "equity,money,rates"
+    # P1 ships rates, P2 money, P3 equity, P4 gold. Anything else is scope creep.
+    assert probe.stdout.strip() == "equity,gold,money,rates"
 
 
 def test_a_registered_engine_can_run_end_to_end(pit_accessor):
@@ -263,10 +263,11 @@ def test_a_registered_engine_can_run_end_to_end(pit_accessor):
 def test_the_data_layer_populated_the_provider_registry():
     """Discovery by name is the point; an empty table means nobody imported it.
 
-    ``engine_output`` is in here with the external sources on purpose: an engine's
-    published output is fetched over HTTP through the same protected transport as
-    FRED, and treating it as a provider is what lets one engine consume another's
-    work without importing it.
+    ``engine_output`` and ``derived`` are in here with the external sources on
+    purpose. Both are fetched over HTTP through the same protected transport as
+    FRED — one is another engine's published output, the other is arithmetic over
+    series already in the store — and treating them as providers is what lets a
+    consumer read either without importing the code that produced it.
     """
     import findynamics.data.providers  # noqa: F401  (import triggers registration)
 
@@ -278,6 +279,11 @@ def test_the_data_layer_populated_the_provider_registry():
         "bea",
         "engine_output",
         "yahoo",
+        "derived",
+        # P4. The London bullion benchmark, read from the body that sets it —
+        # FRED delisted the LBMA gold series it used to carry, so there is no
+        # longer a FRED route to the fix at all.
+        "lbma",
     }
 
 

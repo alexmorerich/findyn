@@ -176,6 +176,12 @@ source_modules = ["findynamics.engines.money"]
 forbidden_modules = ["findynamics.engines.rates"]
 
 [[tool.importlinter.contracts]]
+name = "Gold reads the equity instability index as data, never as code"
+type = "forbidden"
+source_modules = ["findynamics.engines.gold"]
+forbidden_modules = ["findynamics.engines.equity"]
+
+[[tool.importlinter.contracts]]
 name = "Crypto is quarantined"
 type = "forbidden"
 source_modules = ["findynamics.portfolio", "findynamics.factors", "findynamics.core", "findynamics.data"]

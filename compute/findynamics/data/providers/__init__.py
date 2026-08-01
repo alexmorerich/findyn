@@ -13,6 +13,7 @@ from findynamics.data.providers.base import (
     SeriesMetadata,
     synthesize_release_date,
 )
+from findynamics.data.providers.lbma import LbmaProvider
 from findynamics.data.providers.published import PublishedOutputProvider, resolve_api_base
 from findynamics.data.providers.registry import (
     KEYLESS_PROVIDERS,
@@ -28,6 +29,7 @@ __all__ = [
     "NETWORK_PROVIDERS",
     "QUOTAS",
     "FetchResult",
+    "LbmaProvider",
     "Observation",
     "Provider",
     "ProviderError",

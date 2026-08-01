@@ -20,6 +20,18 @@ venv/
 
 # Tooling scratch
 .playwright-mcp/
+.claude/worktrees/
+
+# Ad-hoc screenshots of the running dashboard, which land in the repo root
+# because that is where the browser tooling drops them. Scoped to the root
+# (leading slash) so it cannot swallow a real asset under dashboard/ — there are
+# no tracked PNGs today, and the day one arrives it should not be silently
+# ignored because of a screenshot rule.
+#
+# They are worth ignoring rather than committing: a screenshot is a picture of
+# one moment of a live site, it is stale within a day, and the site itself is
+# the better reference.
+/*.png
 
 # Data / artifacts (never commit raw source data or model output)
 compute/data/

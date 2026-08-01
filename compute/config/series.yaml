@@ -225,11 +225,18 @@ engines:
     # FinGold's inputs (Phase 4). Gold has no cash flow, so there is no
     # valuation series here and never will be — the engine models *drivers*.
     series:
-      # LBMA London PM fix, USD/oz. Daily, one business day of lag. The PM fix
-      # rather than AM: it is the benchmark most contracts settle against, and
+      # LBMA London PM fix, USD/oz. Daily from 1968-04-01, one day of lag. The PM
+      # fix rather than AM: it is the benchmark most contracts settle against, and
       # mixing the two would put a several-hour timing break in the middle of a
       # single series.
-      price: {id: "FRED:GOLDPMGBD228NLBM", provider: fred, frequency: daily, publication_lag_days: 1}
+      #
+      # Read from LBMA rather than FRED, and not by preference. This role was
+      # declared as FRED:GOLDPMGBD228NLBM; FRED has since delisted the whole ICE
+      # Benchmark Administration set, and both GOLDPMGBD228NLBM and
+      # GOLDAMGBD228NLBM now answer `400 The series does not exist` (verified
+      # 2026-08-01 with a working key). LBMA publishes the same benchmark itself,
+      # with more history than FRED ever carried — see data/providers/lbma.py.
+      price: {id: "LBMA:GOLD_PM", provider: lbma, frequency: daily, publication_lag_days: 1}
 
       # The driver panel (P4 §2). Every one of these is already ingested for a
       # shared factor or another engine; naming them here declares the ROLE each
@@ -240,14 +247,36 @@ engines:
       # minus breakeven, both as levels — drivers.py takes the 12m change too.
       nominal_10y:  {id: "FRED:DGS10",     provider: fred, frequency: daily, publication_lag_days: 1}
       breakeven_10y: {id: "FRED:T10YIE",   provider: fred, frequency: daily, publication_lag_days: 1}
+      # The breakeven starts in 2003, and a driver that starts in 2003 makes the
+      # 1980 and 1987 gold regimes unfittable — which is most of the history that
+      # would tell a crisis bid apart from a rate headwind. Before TIPS existed,
+      # drivers.py falls back to an EX-POST real rate: nominal 10y minus trailing
+      # 12m CPI inflation. A different quantity from a breakeven-implied ex-ante
+      # rate, so the splice is recorded per date rather than blended silently.
+      cpi:          {id: "FRED:CPIAUCSL",  provider: fred, frequency: monthly, publication_lag_days: 14}
       # Broad trade-weighted dollar. Gold is priced in USD, so dollar strength is
       # a mechanical headwind before any behavioural story about it.
       usd_index:    {id: "FRED:DTWEXBGS",  provider: fred, frequency: daily, publication_lag_days: 1}
+      # The broad index only starts in 2006. The major-currencies index runs from
+      # 1973 and was discontinued in 2019, so the two together cover the whole
+      # record with a five-year overlap. They are different indices at different
+      # levels and are NEVER spliced as levels — drivers.py splices the 12-month
+      # log CHANGE, which is the only thing the driver reads and the only thing
+      # the two indices agree about.
+      usd_index_legacy: {id: "FRED:DTWEXM", provider: fred, frequency: daily, publication_lag_days: 1}
       # Financial conditions, for the stress driver. Weekly, and carrying the
       # limitation in open issue 13: fetched without vintages because the vintage
       # path truncates the series, so this reads today's values at historical
       # dates. Recorded rather than hidden.
       liquidity_stress: {id: "FRED:NFCI",  provider: fred, frequency: weekly, publication_lag_days: 7}
+
+      # The equity leg of the hedge score. hedge.py asks a conditional question —
+      # how does gold move on the days equities are IN A DRAWDOWN — so it needs
+      # the index itself, not a summary of it. NASDAQ100 rather than SP500 because
+      # FRED licence-caps SP500 to a rolling ten years, which does not reach 2008
+      # or 2011; this one starts in 1986 and covers every stress window the
+      # backtest asserts on. It is a proxy for "equities", and the engine says so.
+      equity_proxy:  {id: "FRED:NASDAQ100", provider: fred, frequency: daily, publication_lag_days: 1}
 
       # FinEquity's instability index, read back as DATA (§3 rule 2). This is the
       # crisis-premium input, and routing it through the engine_output provider

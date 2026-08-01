@@ -20,6 +20,7 @@ import pytest
 
 from findynamics.core.contracts.vocab import ASSETS, DISCOUNT_HORIZONS, HORIZONS, QUANTILES
 from findynamics.engines.equity.domain import REGIMES
+from findynamics.engines.gold.domain import GOLD_REGIMES
 from findynamics.engines.money.domain import MONEY_REGIMES
 from findynamics.engines.rates.domain import RATE_REGIMES
 from findynamics.factors.definitions import FACTORS
@@ -51,6 +52,10 @@ def ts_string_array(name: str) -> list[str]:
         # relabels every row the money engine has ever written.
         ("MONEY_REGIMES", MONEY_REGIMES),
         ("DISCOUNT_HORIZONS", DISCOUNT_HORIZONS),
+        # P4. Order is the wire order here too: `engine_output` publishes the
+        # gold regime as its index (`regime_code`), so a reordering silently
+        # relabels every row the gold engine has ever written.
+        ("GOLD_REGIMES", GOLD_REGIMES),
     ],
 )
 def test_vocabulary_matches_the_serving_plane(name, python_value):
@@ -83,6 +88,14 @@ def test_educational_horizons_are_excluded_from_evaluation():
 
     assert set(EDUCATIONAL_HORIZONS) == {"educational_30y", "educational_50y"}
     assert EDUCATIONAL_HORIZONS.issubset(HORIZONS)
+
+
+def test_gold_vocabulary_stays_out_of_the_shared_layer():
+    """§3 rule 2 — gold's three states belong to engines/gold, not to core."""
+    from findynamics.core.contracts import vocab
+
+    for name in ("GOLD_REGIMES", "GOLD_METRICS"):
+        assert not hasattr(vocab, name), f"{name} belongs to engines/gold, not core"
 
 
 def test_equity_vocabulary_stays_out_of_the_shared_layer():
