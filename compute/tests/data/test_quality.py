@@ -260,3 +260,73 @@ def test_status_precedence(errors, warnings, expected):
     report.errors = [Finding("e", "m", "error")] * errors
     report.warnings = [Finding("w", "m", "warning")] * warnings
     assert report.status == expected
+
+
+# ---------------------------------------------------------------------------
+# jumps near zero — the check that withheld fifteen FRED series at once
+# ---------------------------------------------------------------------------
+
+
+def test_a_rate_moving_off_a_near_zero_floor_is_not_an_abnormal_jump():
+    """The production failure this rule exists to prevent.
+
+    `FRED:DGS1MO` went from 0.07% to 0.26% on 2008-09-18 — nineteen basis points,
+    in the week Lehman failed, and completely correct. As a *relative* change it
+    is +271%, which tripped the jump check and withheld the whole series.
+
+    Fifteen FRED series were withheld this way in one backfill: the entire short
+    end of the curve (1m, 3m, 6m, DTB3, SOFR), both financial-conditions indices
+    (NFCI, STLFSI4), both term spreads (T10Y2Y, T10Y3M), TIPS real yields, and
+    the reverse-repo balance. Every one of them can sit at or cross zero, and a
+    percentage change is meaningless when its denominator is.
+    """
+    # Typical 1m bill around 1.5%, then the 2008 sequence near zero.
+    values = [1.5] * 40 + [0.07, 0.26, 0.12, 0.03, 0.15]
+    report = check_series(
+        metadata(unit="percent", frequency="daily"),
+        monthly(values, unit="percent", frequency="daily"),
+        policy=QualityPolicy(allow_non_positive=True),
+    )
+
+    assert "abnormal_jump" not in codes(report.errors)
+
+
+def test_a_spread_crossing_zero_is_not_an_abnormal_jump():
+    """T10Y3M inverts. Crossing zero makes the denominator tiny, then negative."""
+    values = [1.2] * 40 + [0.30, 0.05, -0.02, -0.40, 0.10]
+    report = check_series(
+        metadata(unit="percent", frequency="daily"),
+        monthly(values, unit="percent", frequency="daily"),
+        policy=QualityPolicy(allow_non_positive=True),
+    )
+
+    assert "abnormal_jump" not in codes(report.errors)
+
+
+def test_a_real_decimal_error_near_zero_is_still_caught():
+    """The relaxation must not become a hole.
+
+    Falling back to an absolute test is not the same as switching the check off:
+    a value that moves by many times the series' own typical magnitude is still
+    wrong, whatever its predecessor was.
+    """
+    values = [1.5] * 40 + [0.07, 150.0]  # a hundredfold slip, from near zero
+    report = check_series(
+        metadata(unit="percent", frequency="daily"),
+        monthly(values, unit="percent", frequency="daily"),
+        policy=QualityPolicy(allow_non_positive=True),
+    )
+
+    assert "abnormal_jump" in codes(report.errors)
+
+
+def test_a_decimal_error_on_a_large_series_is_still_caught_by_the_relative_test():
+    """Series that never approach zero keep the original behaviour exactly."""
+    values = [3000.0] * 40 + [30000.0]
+    report = check_series(
+        metadata(unit="index", frequency="daily"),
+        monthly(values, unit="index", frequency="daily"),
+        policy=QualityPolicy(),
+    )
+
+    assert "abnormal_jump" in codes(report.errors)
