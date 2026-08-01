@@ -280,8 +280,11 @@ def test_a_rate_moving_off_a_near_zero_floor_is_not_an_abnormal_jump():
     the reverse-repo balance. Every one of them can sit at or cross zero, and a
     percentage change is meaningless when its denominator is.
     """
-    # Typical 1m bill around 1.5%, then the 2008 sequence near zero.
-    values = [1.5] * 40 + [0.07, 0.26, 0.12, 0.03, 0.15]
+    # Typical 1m bill around 1.5%, then the 2008 sequence near zero. Both moves
+    # matter: judging point by point passed 0.07 -> 0.26 and still failed
+    # 0.08 -> 0.51, which is not a distinction anyone could defend. The property
+    # belongs to the series, so it is decided once for the series.
+    values = [1.5] * 40 + [0.07, 0.26, 0.12, 0.08, 0.51, 0.03, 0.15]
     report = check_series(
         metadata(unit="percent", frequency="daily"),
         monthly(values, unit="percent", frequency="daily"),
@@ -330,3 +333,38 @@ def test_a_decimal_error_on_a_large_series_is_still_caught_by_the_relative_test(
     )
 
     assert "abnormal_jump" in codes(report.errors)
+
+
+def test_a_strictly_positive_series_keeps_the_relative_test():
+    """The relaxation is scoped to series that reach zero, and nothing else.
+
+    Initial jobless claims never approach zero relative to their own level, so
+    they stay on the percentage test — which means March 2020 (a tenfold rise,
+    real) is still reported. That is the check working as designed on a genuine
+    outlier, and it is a different question from the one this rule fixes.
+    """
+    values = [300.0] * 40 + [282.0, 3010.0]
+    report = check_series(
+        metadata(unit="index", frequency="weekly"),
+        monthly(values, unit="index", frequency="weekly"),
+        policy=QualityPolicy(),
+    )
+
+    assert "abnormal_jump" in codes(report.errors)
+
+
+def test_a_sign_changing_series_is_judged_on_absolute_change_throughout():
+    """A quantity that changes sign has no stable percentage change anywhere.
+
+    T10Y3M inverts and un-inverts. Every crossing produces a denominator near
+    zero, and the crossings are not rare events for this series — they are what
+    it does.
+    """
+    values = [1.2, 0.9, 0.4, 0.05, -0.02, -0.40, -0.15, 0.10, 0.55, 1.1] * 5
+    report = check_series(
+        metadata(unit="percent", frequency="daily"),
+        monthly(values, unit="percent", frequency="daily"),
+        policy=QualityPolicy(allow_non_positive=True),
+    )
+
+    assert "abnormal_jump" not in codes(report.errors)

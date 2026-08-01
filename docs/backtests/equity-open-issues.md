@@ -570,12 +570,22 @@ spread and standardized index in this system spends part of its life**. A
 percentage change is meaningless when its denominator is.
 
 The fix is not a looser threshold — that would have traded these false positives
-for real misses. It is to notice when the denominator cannot carry a percentage:
-below a fraction of the series' own median magnitude, the check falls back to an
-**absolute** comparison against that same magnitude. Scale is taken from the
-series itself, so it works without knowing whether the numbers are percentages,
-index levels or dollar balances. Series that never approach zero are unaffected
-and keep the original test exactly.
+for real misses. It is to notice when a percentage change is not a stable
+description of the series at all, and to judge that series on **absolute** change
+against its own typical magnitude instead. Scale comes from the series itself, so
+it needs no per-series configuration and no knowledge of whether the numbers are
+percentages, index levels or dollar balances.
+
+Two details were wrong in the first attempt and are worth keeping:
+
+- **The decision belongs to the series, not the observation.** Falling back per
+  point still passed DGS1MO on 0.07 → 0.26 and failed it on 0.08 → 0.51, which is
+  not a distinction anyone could defend. A quantity that changes sign has no
+  stable percentage change *anywhere*, so it is decided once for the whole series.
+- **The scale is the 75th percentile of |value|, not the median.** For a series
+  that spends years near zero — a policy rate at the floor, a spread that sits
+  inverted — the median *is* near zero, which made the scale as uninformative as
+  the values it was meant to calibrate against.
 
 Both directions are pinned: a rate going 0.07 → 0.26 passes, a hundredfold
 decimal slip from the same 0.07 still fails, and a 3000 → 30000 index error is
