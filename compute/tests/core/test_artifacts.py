@@ -22,6 +22,7 @@ from findynamics.core.artifacts import (
     ArtifactStore,
     RemoteArtifactStore,
     build_artifact_store,
+    split_pin,
 )
 from findynamics.core.signing import sign
 
@@ -117,7 +118,10 @@ def test_save_addresses_the_artifact_by_its_own_model_version(monkeypatch, trans
         lambda request: httpx.Response(201, json={"ok": True}),
     )
 
-    version = store.save("equity", {"model_version": "equity-1.0.0+cal.yahoo_gspc", "d": 0.35})
+    version = store.save(
+        "equity",
+        {"model_version": "equity-1.0.0+cal.yahoo_gspc", "as_of": "2026-07-31", "d": 0.35},
+    )
 
     assert version == "equity-1.0.0+cal.yahoo_gspc"
     request = transport_calls[0]
@@ -129,7 +133,7 @@ def test_save_addresses_the_artifact_by_its_own_model_version(monkeypatch, trans
 def test_save_signs_the_exact_bytes_it_sends(monkeypatch, transport_calls):
     store = RemoteArtifactStore(BASE, SECRET)
     patch_httpx(monkeypatch, transport_calls, lambda r: httpx.Response(201, json={"ok": True}))
-    store.save("equity", {"model_version": "v1", "d": 0.35})
+    store.save("equity", {"model_version": "v1", "as_of": "2026-07-31", "d": 0.35})
 
     request = transport_calls[0]
     body = request.content.decode()
@@ -151,7 +155,7 @@ def test_a_conflicting_write_is_an_error_not_a_silent_overwrite(monkeypatch, tra
     store = RemoteArtifactStore(BASE, SECRET)
     patch_httpx(monkeypatch, transport_calls, lambda r: httpx.Response(409, json={"e": 1}))
     with pytest.raises(ValueError, match="immutable"):
-        store.save("equity", {"model_version": "v1"})
+        store.save("equity", {"model_version": "v1", "as_of": "2026-07-31"})
 
 
 def test_load_follows_latest_by_default(monkeypatch, transport_calls):
@@ -246,7 +250,14 @@ def test_refit_then_predict_across_two_processes(monkeypatch, transport_calls, t
     patch_httpx(monkeypatch, transport_calls, handler)
 
     refit = RemoteArtifactStore(BASE, SECRET)
-    refit.save("equity", {"model_version": "equity-1.0.0+cal.yahoo_gspc", "hmm": {"seed": 7}})
+    refit.save(
+        "equity",
+        {
+            "model_version": "equity-1.0.0+cal.yahoo_gspc",
+            "as_of": "2026-07-31",
+            "hmm": {"seed": 7},
+        },
+    )
 
     daily = RemoteArtifactStore(BASE, SECRET)
     loaded = daily.load("equity")
@@ -263,7 +274,79 @@ def test_local_storage_cannot_serve_a_second_process(tmp_path):
     in CI it is the whole failure.
     """
     refit = ArtifactStore(tmp_path / "refit-container")
-    refit.save("equity", {"model_version": "v1", "hmm": {"seed": 7}})
+    refit.save("equity", {"model_version": "v1", "as_of": "2026-07-31", "hmm": {"seed": 7}})
 
     daily = ArtifactStore(tmp_path / "daily-container")
     assert daily.load("equity") == {}
+
+
+# ---------------------------------------------------------------------------
+# (model_version, fit date) — the address that survives a monthly refit
+# ---------------------------------------------------------------------------
+
+
+def test_a_second_refit_of_the_same_version_is_not_a_conflict(monkeypatch, transport_calls):
+    """The production failure this key layout exists to fix.
+
+    An expanding-window refit re-estimates every parameter, so the artifact's
+    content legitimately changes each month while the *specification* — which
+    features, which estimator, which vocabulary — does not. Addressed by version
+    alone, the second refit of any engine conflicted with the first and every one
+    after it, forever. `rates-1.0.0` was the first to run twice and did exactly
+    that; the monthly job had been failing on it before anyone read the log.
+    """
+    store = RemoteArtifactStore(BASE, SECRET)
+    patch_httpx(monkeypatch, transport_calls, lambda r: httpx.Response(201, json={"ok": True}))
+
+    store.save("rates", {"model_version": "rates-1.0.0", "as_of": "2026-06-30", "lambda": 0.61})
+    store.save("rates", {"model_version": "rates-1.0.0", "as_of": "2026-07-31", "lambda": 0.58})
+
+    # Same version, two fits, no conflict — and the fit date travels in the body
+    # so the stored bytes say which month produced them.
+    fits = [json.loads(call.content)["fit_date"] for call in transport_calls]
+    assert fits == ["2026-06-30", "2026-07-31"]
+
+
+def test_the_fit_date_is_normalised_from_whatever_the_engine_called_it(
+    monkeypatch, transport_calls
+):
+    """Equity writes `as_of`, rates writes `fitted_as_of`. The address cannot
+    depend on which engine happened to write the document."""
+    store = RemoteArtifactStore(BASE, SECRET)
+    patch_httpx(monkeypatch, transport_calls, lambda r: httpx.Response(201))
+
+    store.save("rates", {"model_version": "v1", "fitted_as_of": "2026-07-31T00:00:00+00:00"})
+    assert json.loads(transport_calls[0].content)["fit_date"] == "2026-07-31"
+
+
+def test_save_refuses_a_payload_with_no_fit_date(monkeypatch, transport_calls):
+    store = RemoteArtifactStore(BASE, SECRET)
+    patch_httpx(monkeypatch, transport_calls, lambda r: httpx.Response(201))
+
+    with pytest.raises(ValueError, match="fit date"):
+        store.save("equity", {"model_version": "v1", "d": 0.35})
+    assert transport_calls == []
+
+
+def test_a_pin_can_name_one_exact_fit() -> None:
+    """Replaying a published state needs the fit, not just the specification.
+
+    The specification alone still moves under you every month — which is the
+    whole reason the fit date is part of the address.
+    """
+    assert split_pin("equity-1.1.0+cal.yahoo_gspc@2026-07-31") == (
+        "equity-1.1.0+cal.yahoo_gspc",
+        "2026-07-31",
+    )
+    # A bare version is still valid and means "the newest fit of this spec".
+    assert split_pin("equity-1.1.0+cal.yahoo_gspc") == ("equity-1.1.0+cal.yahoo_gspc", None)
+
+
+def test_a_pinned_fit_is_requested_exactly(monkeypatch, transport_calls):
+    store = RemoteArtifactStore(BASE, SECRET, version="equity-1.1.0+cal.x@2026-06-30")
+    patch_httpx(monkeypatch, transport_calls, lambda r: httpx.Response(200, json={"d": 1}))
+
+    store.load("equity")
+    url = str(transport_calls[0].url)
+    assert "equity-1.1.0%2Bcal.x" in url
+    assert "fit=2026-06-30" in url

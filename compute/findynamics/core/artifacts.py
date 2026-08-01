@@ -17,11 +17,20 @@ Two implementations of the same tiny interface:
 :func:`build_artifact_store` picks between them from the environment, so no
 engine and no job has to know which one it is talking to.
 
-**Artifacts are immutable and addressed by model_version.** A version is written
-once; re-writing the same bytes is a no-op and re-writing *different* bytes is an
-error. That is the property that makes "which model produced this state" an
-answerable question — a mutable artifact under a published version means every
-backtest of that version silently becomes a backtest of something else.
+**Artifacts are immutable and addressed by (model_version, fit date).** A pair is
+written once; re-writing the same bytes is a no-op and re-writing *different*
+bytes is an error. That is the property that makes "which model produced this
+state" an answerable question.
+
+Both halves of the address are needed, and it took a production failure to see
+why. ``model_version`` names the model *specification* — which features, which
+estimator, which vocabulary. A monthly expanding-window refit re-estimates every
+parameter, so the artifact's content legitimately changes each month while the
+specification does not. Keyed on the version alone, immutability meant the second
+refit of any engine conflicted with the first, forever; the first engine to run
+twice did exactly that. "Version 1.1.0 is these bytes" was never a claim this
+system could keep. "The state published on this date came from *this* fit of
+1.1.0" is, and it is the one that matters for replay.
 
 A missing or unreadable artifact is never fatal — ``load`` returns ``{}`` and the
 engine falls back to its configured defaults or declines to publish. A daily run
@@ -112,13 +121,46 @@ SECRET_ENV = "ADMIN_HMAC_SECRET"
 #: Set to pin a run to one exact model version instead of following `latest`.
 #: A backtest or a replay of a published state should use this; a daily run
 #: should not, or it would never pick up a refit.
+#:
+#: Accepts ``<version>`` — the newest fit of that specification — or
+#: ``<version>@<YYYY-MM-DD>`` for one exact fit. Replaying a published state
+#: wants the second form: the specification alone still moves under you every
+#: month, which is the whole reason the fit date is part of the address.
 VERSION_ENV = "FINDYN_MODEL_VERSION"
+
+#: Field carrying the fit date in an artifact document. Engines spell their own
+#: provenance differently (``as_of``, ``fitted_as_of``); :meth:`RemoteArtifactStore.save`
+#: normalises to this one so the address does not depend on which engine wrote it.
+FIT_FIELD = "fit_date"
+
+#: Where the fit date is read from when an engine has not set `FIT_FIELD`.
+FIT_SOURCES: tuple[str, ...] = (FIT_FIELD, "as_of", "fitted_as_of")
 
 
 def _admin_base(url: str) -> str:
     """Normalise an admin URL to its base, accepting the write-back endpoint."""
     trimmed = url.rstrip("/")
     return trimmed[: -len("/results")] if trimmed.endswith("/results") else trimmed
+
+
+def split_pin(pin: str) -> tuple[str, str | None]:
+    """``"equity-1.1.0+cal.x@2026-07-31"`` -> ``("equity-1.1.0+cal.x", "2026-07-31")``.
+
+    Split on the last ``@`` only: a model version may legitimately contain ``+``
+    and ``.`` but never ``@``, so this is unambiguous, and splitting on the first
+    one would break the day someone tags a version with an email-looking suffix.
+    """
+    version, sep, fit = pin.rpartition("@")
+    return (version, fit) if sep else (pin, None)
+
+
+def fit_date_of(payload: dict[str, Any]) -> str | None:
+    """The date this artifact was fitted through, whatever the engine called it."""
+    for field in FIT_SOURCES:
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:10]
+    return None
 
 
 class RemoteArtifactStore:
@@ -149,8 +191,9 @@ class RemoteArtifactStore:
     def directory(self) -> str:
         return f"{self._base}/artifacts"
 
-    def _url(self, name: str, version: str) -> str:
-        return f"{self._base}/artifacts/{quote(name, safe='')}/{quote(version, safe='')}"
+    def _url(self, name: str, version: str, fit: str | None = None) -> str:
+        url = f"{self._base}/artifacts/{quote(name, safe='')}/{quote(version, safe='')}"
+        return f"{url}?fit={quote(fit, safe='')}" if fit else url
 
     def load(self, name: str) -> dict[str, Any]:
         """The pinned version if one is configured, else whatever is current.
@@ -161,8 +204,8 @@ class RemoteArtifactStore:
         """
         import httpx
 
-        version = self._version or "latest"
-        url = self._url(name, version)
+        version, fit = split_pin(self._version) if self._version else ("latest", None)
+        url = self._url(name, version, fit)
         try:
             response = httpx.get(
                 url,
@@ -191,15 +234,29 @@ class RemoteArtifactStore:
             return {}
 
         resolved = response.headers.get("x-findyn-model-version", version)
-        log.info("loaded artifact %s@%s from R2", name, resolved)
+        resolved_fit = response.headers.get("x-findyn-model-fit")
+        log.info(
+            "loaded artifact %s@%s from R2 (fit %s)",
+            name,
+            resolved,
+            resolved_fit or "pre-dated, legacy key",
+        )
         return body
 
     def save(self, name: str, payload: dict[str, Any]) -> str:
-        """Store under the payload's own ``model_version``. Write-once.
+        """Store under the payload's own ``model_version`` and fit date. Write-once.
 
-        The version is taken from the payload rather than passed in, so an
-        artifact cannot be filed under a name its own contents disagree with —
-        the serving side rejects that mismatch as well, on the same reasoning.
+        Both halves of the address come from the payload rather than from
+        arguments, so an artifact cannot be filed under a name or a date its own
+        contents disagree with — the serving side rejects that mismatch too, on
+        the same reasoning.
+
+        The fit date is normalised into the document under `FIT_FIELD` before it
+        is serialized, so the stored bytes say when they were fitted. An engine
+        that spells it `as_of` or `fitted_as_of` needs no change; one that has no
+        fit date at all is an error, because a fitted model that cannot be told
+        apart from next month's refit of the same specification is exactly the
+        thing this key exists to prevent.
         """
         import httpx
 
@@ -210,7 +267,16 @@ class RemoteArtifactStore:
                 "cannot be addressed by version cannot be published"
             )
 
-        body = json.dumps(payload, indent=2, sort_keys=True)
+        fit = fit_date_of(payload)
+        if not fit:
+            raise ValueError(
+                f"artifact {name!r}@{version} has no fit date; set one of "
+                f"{', '.join(FIT_SOURCES)}. Without it, this month's fit and next "
+                "month's are indistinguishable and neither can be replayed"
+            )
+
+        document = {**payload, FIT_FIELD: fit}
+        body = json.dumps(document, indent=2, sort_keys=True)
         url = self._url(name, version)
         response = httpx.put(
             url,
@@ -223,11 +289,14 @@ class RemoteArtifactStore:
         )
         if response.status_code == 409:
             raise ValueError(
-                f"artifact {name}@{version} already exists with different content; "
-                "fitted models are immutable — bump the model version instead"
+                f"artifact {name}@{version} fitted {fit} already exists with different "
+                "content; fitted models are immutable — a refit on a later date is a "
+                "new fit, not an edit"
             )
         response.raise_for_status()
-        log.info("stored artifact %s@%s in R2 (%s)", name, version, response.status_code)
+        log.info(
+            "stored artifact %s@%s fitted %s in R2 (%s)", name, version, fit, response.status_code
+        )
         return version
 
 

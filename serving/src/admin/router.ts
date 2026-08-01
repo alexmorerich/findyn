@@ -62,7 +62,6 @@ admin.post('/results', async (c) => {
   }
 });
 
-
 // ---------------------------------------------------------------------------
 // Fitted-model storage (§6). Behind the same HMAC as the write-back: the
 // compute plane is the only thing that reads or writes these, and a fitted
@@ -87,24 +86,41 @@ admin.put('/artifacts/:name/:version', async (c) => {
   const body = c.get('rawBody');
   const version = decodeURIComponent(c.req.param('version'));
 
-  let declared: string | undefined;
+  let declared: { model_version?: string; fit_date?: string };
   try {
-    declared = (JSON.parse(body) as { model_version?: string }).model_version;
+    declared = JSON.parse(body) as { model_version?: string; fit_date?: string };
   } catch {
     return c.json({ error: 'bad_request', message: 'artifact body must be JSON' }, 400);
   }
-  if (declared && declared !== version) {
+  if (declared.model_version && declared.model_version !== version) {
     return c.json(
       {
         error: 'bad_request',
-        message: `path version ${version} disagrees with the body's model_version ${declared}`,
+        message: `path version ${version} disagrees with the body's model_version ${declared.model_version}`,
+      },
+      400,
+    );
+  }
+
+  // The fit date rides in the body beside model_version rather than in the path.
+  // Both are properties of the artifact, and an artifact filed under a date its
+  // own contents disagree with is the same class of mistake as one filed under
+  // the wrong version — which this endpoint already refuses.
+  const fit = declared.fit_date;
+  if (!fit) {
+    return c.json(
+      {
+        error: 'bad_request',
+        message:
+          'artifact body must carry fit_date (YYYY-MM-DD); a fitted model with no fit date ' +
+          'cannot be told apart from the next months refit of the same specification',
       },
       400,
     );
   }
 
   try {
-    const result = await putArtifact(c.env, c.req.param('name'), version, body);
+    const result = await putArtifact(c.env, c.req.param('name'), version, fit, body);
     return c.json({ ok: true, ...result }, result.created ? 201 : 200);
   } catch (err) {
     const failure = artifactFailure(err);
@@ -115,15 +131,20 @@ admin.put('/artifacts/:name/:version', async (c) => {
 /** Fetch one artifact by version, or `latest` to resolve the pointer. */
 admin.get('/artifacts/:name/:version', async (c) => {
   try {
-    const { version, body } = await getArtifact(
+    const { version, fit, body } = await getArtifact(
       c.env,
       c.req.param('name'),
       decodeURIComponent(c.req.param('version')),
+      c.req.query('fit'),
     );
-    // The resolved version rides in a header so the body stays exactly the bytes
+    // Both resolved halves ride in headers so the body stays exactly the bytes
     // that were stored — a caller re-signing or hashing it must see it unchanged.
     return new Response(body, {
-      headers: { 'content-type': 'application/json', 'x-findyn-model-version': version },
+      headers: {
+        'content-type': 'application/json',
+        'x-findyn-model-version': version,
+        ...(fit ? { 'x-findyn-model-fit': fit } : {}),
+      },
     });
   } catch (err) {
     const failure = artifactFailure(err);
@@ -133,7 +154,10 @@ admin.get('/artifacts/:name/:version', async (c) => {
 
 admin.get('/artifacts/:name', async (c) => {
   try {
-    return c.json({ name: c.req.param('name'), versions: await listVersions(c.env, c.req.param('name')) });
+    return c.json({
+      name: c.req.param('name'),
+      versions: await listVersions(c.env, c.req.param('name')),
+    });
   } catch (err) {
     const failure = artifactFailure(err);
     return c.json(failure.body, failure.status);

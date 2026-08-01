@@ -442,6 +442,54 @@ Two things this cost, worth stating:
 
 ---
 
+## 17. RESOLVED — immutability made the monthly refit impossible
+
+**Status:** fixed. The guard was right; the thing it was guarding was wrong.
+
+R2 artifacts were addressed by `model_version` alone and written once. The second
+monthly refit of any engine therefore conflicted with the first — and with every
+one after it, permanently. `rates-1.0.0` was the first to run twice and failed
+exactly as designed: *"already exists with different content; fitted models are
+immutable — bump the model version instead."*
+
+Following that advice would mean a version bump every month, forever, for a model
+whose *specification* — which features, which estimator, which vocabulary — had
+not changed at all. An expanding-window refit re-estimating its parameters on one
+more month of data is not a new model. Semantic versions track the code; they
+cannot also track the data state without becoming meaningless.
+
+"Version 1.1.0 is these exact bytes" was never a claim this system could keep.
+The claim that matters for replay is **"the state published on this date came
+from *this* fit of 1.1.0"**, and that is now the address:
+
+    artifacts/<name>/<model_version>/<fit_date>.json
+
+Immutability is unchanged in strength and now applies to the thing that is
+actually immutable: a given fit on a given date is frozen forever. `latest`
+carries both halves and moves forward only — an out-of-order backfill of an older
+date cannot make a stale fit current, which last-writer-wins would have done
+silently.
+
+`FINDYN_MODEL_VERSION` accepts `<version>` (newest fit of that specification) or
+`<version>@<YYYY-MM-DD>` (one exact fit). A replay wants the second: pinning the
+specification alone still moves under you every month, which is the whole reason
+the fit date is part of the address.
+
+**Back-migration: none needed, by construction.** Production held one flat
+`artifacts/<name>/<version>.json` and a pointer with no `fit`. `getArtifact`
+resolves the pointer, finds no fit, finds no nested keys, and falls through to
+the flat key — serving the bytes that are there and reporting `fit: null` rather
+than inventing a date for a document that does not carry one. The next refit
+writes the nested key and stamps the pointer, after which the legacy branch is
+never taken. The only ordering constraint is that the worker deploys before
+compute writes, since the new `PUT` requires `fit_date` in the body.
+
+The fit date is normalised on write: engines spell their own provenance
+differently (`as_of`, `fitted_as_of`), and the address must not depend on which
+engine happened to author the document.
+
+---
+
 ## Smaller things
 
 - **`derived_features` and `engine_output` overlap.** The kinematic path is
