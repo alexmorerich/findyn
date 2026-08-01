@@ -101,6 +101,34 @@ DEFAULT_SEED = 20260731
 
 
 @dataclass(frozen=True)
+class PathSample:
+    """Per-path outcomes, kept for the §11 R2 archive.
+
+    **Not** the step-by-step paths. A generational run is 10,000 × 3,024 floats
+    and the 50-year one is 10,000 × 12,600 — about 1.5 GB per day across the
+    horizons, written nightly, to answer questions nobody has asked. What offline
+    analysis actually needs is the *outcome* of each path, which is these three
+    arrays and about 0.1% of the size: from them any quantile, any drawdown
+    threshold and any tail statistic can be re-derived without re-running the
+    simulation. Path-*dependent* questions cannot, and that is the stated cost.
+    """
+
+    #: Terminal log level, one per path.
+    terminal: np.ndarray
+    #: Maximum drawdown from each path's own running peak, one per path.
+    max_drawdown: np.ndarray
+    #: Fraction of the horizon each path spent below a previous peak.
+    time_under_water: np.ndarray
+
+    def as_lists(self, digits: int = 6) -> dict[str, list[float]]:
+        return {
+            "terminal": np.round(self.terminal, digits).tolist(),
+            "max_drawdown": np.round(self.max_drawdown, digits).tolist(),
+            "time_under_water": np.round(self.time_under_water, digits).tolist(),
+        }
+
+
+@dataclass(frozen=True)
 class HorizonForecast:
     """One horizon's distribution, and the statistics §11 asks to report."""
 
@@ -117,6 +145,10 @@ class HorizonForecast:
     median_time_under_water: float
     paths: int
     educational_only: bool
+    #: Per-path outcomes. Present on a live run, absent when a forecast has been
+    #: rebuilt from stored quantiles — which is why it is optional rather than
+    #: assumed by everything downstream.
+    sample: PathSample | None = None
 
     @property
     def median_log_level(self) -> float:
@@ -301,6 +333,11 @@ def summarise(
     return HorizonForecast(
         horizon=horizon,
         years=years,
+        sample=PathSample(
+            terminal=terminal,
+            max_drawdown=max_drawdown,
+            time_under_water=time_under_water,
+        ),
         quantiles={q: float(np.quantile(terminal, q)) for q in QUANTILES},
         drawdown_probabilities={
             threshold: float((max_drawdown > threshold).mean()) for threshold in thresholds
@@ -387,6 +424,46 @@ def run_simulation(
     )
 
 
+def archive_document(
+    result: SimulationResult,
+    *,
+    asset: str,
+    as_of: str,
+    model_version: str,
+) -> dict[str, Any]:
+    """The §11 R2 archive payload: every path's outcome, plus what produced it.
+
+    Self-describing on purpose. A bundle that says only "here are 10,000 numbers"
+    is unusable a year later — the reader needs the seed, the shock intensity,
+    the starting level and the horizon lengths to know what the numbers are
+    outcomes *of*, and to reproduce them if they disagree.
+    """
+    return {
+        "asset": asset,
+        "as_of": as_of,
+        "model_version": model_version,
+        "seed": result.seed,
+        "start_log_level": result.start_log_level,
+        "shock_intensity": result.shock_intensity,
+        "contents": (
+            "Per-path outcomes, not step-by-step paths. terminal is the log index "
+            "level at the horizon; max_drawdown is measured against each path's own "
+            "running peak; time_under_water is the fraction of the horizon spent "
+            "below a previous peak. Any quantile or drawdown threshold can be "
+            "re-derived from these. Path-dependent statistics cannot."
+        ),
+        "horizons": {
+            name: {
+                "years": forecast.years,
+                "paths": forecast.paths,
+                "educational_only": forecast.educational_only,
+                **(forecast.sample.as_lists() if forecast.sample is not None else {}),
+            }
+            for name, forecast in result.forecasts.items()
+        },
+    }
+
+
 def forecast_rows(result: SimulationResult) -> list[dict[str, Any]]:
     """Quantile rows in the shape ``forecast_distribution`` takes.
 
@@ -414,6 +491,8 @@ def shock_taxonomy() -> tuple[str, ...]:
 
 
 __all__ = [
+    "PathSample",
+    "archive_document",
     "DEFAULT_PATHS",
     "DEFAULT_SEED",
     "DEFAULT_SHOCK_INTENSITY",

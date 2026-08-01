@@ -364,8 +364,11 @@ api.get('/simulate', async (c) => {
           Object.entries(components).filter(([key]) => key.startsWith('mc_')),
         ),
         note:
-          'Quantile bands are served by /forecast. Full path bundles are archived ' +
-          'to R2 rather than served: 10,000 paths per horizon is not a payload.',
+          'Quantile bands are served by /forecast. Per-path outcomes — terminal ' +
+          'level, maximum drawdown and time under water for every simulated path — ' +
+          'are archived to R2 for offline analysis rather than served here: ' +
+          '10,000 paths per horizon is not a public payload. The step-by-step ' +
+          'paths themselves are not retained; see PathSample for why.',
       },
       {
         as_of: forecast.as_of,

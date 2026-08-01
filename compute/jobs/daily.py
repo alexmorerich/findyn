@@ -38,7 +38,13 @@ from findynamics.data.accessor import PandasPITAccessor
 from findynamics.data.store import load_observations, required_series_ids
 from findynamics.engines import load_engines
 from findynamics.factors.compute import compute_factors
-from jobs._common import base_parser, chunk_on, configure_logging, write_back
+from jobs._common import (
+    archive_simulation,
+    base_parser,
+    chunk_on,
+    configure_logging,
+    write_back,
+)
 
 log = logging.getLogger("findynamics.jobs.daily")
 
@@ -209,6 +215,7 @@ def run(
     features: list[dict[str, Any]] = []
     regimes: list[dict[str, Any]] = []
     forecasts: list[dict[str, Any]] = []
+    archives: list[tuple[str, dict[str, Any]]] = []
     failed: list[str] = []
     silent: list[str] = []
 
@@ -234,6 +241,9 @@ def run(
             feature_rows = engine.derived_features(world)
             regime_rows = engine.regime_states(world)
             forecast_rows = engine.forecasts(world)
+            # Optional hook: only engines that simulate have one to give.
+            archive = getattr(engine, "simulation_archive", None)
+            simulation = archive(world) if callable(archive) else None
         except Exception as err:
             failed.append(engine.name)
             log.exception("engine %s failed publishing its outputs: %s", engine.name, err)
@@ -245,6 +255,8 @@ def run(
         features.extend(derived_feature_payload(row) for row in feature_rows)
         regimes.extend(regime_state_payload(row) for row in regime_rows)
         forecasts.extend(forecast_payload(row) for row in forecast_rows)
+        if simulation is not None:
+            archives.append((engine.name, simulation))
         log.info(
             "%s: %s (+%d output rows, +%d features, +%d regime rows, +%d forecast rows)",
             engine.name,
@@ -310,6 +322,12 @@ def run(
         )
     for chunk in chunks:
         write_back(chunk, dry_run=dry_run)
+
+    # After the write-back, and never in front of it. The archive is a large
+    # payload of secondary value; sending it first would mean a run that timed
+    # out on it published nothing at all.
+    for asset, document in archives:
+        archive_simulation(document, asset=asset, as_of=as_of.isoformat(), dry_run=dry_run)
 
     # A partial run still publishes; the caller learns from the exit code that
     # something is missing without losing the engines that did work.

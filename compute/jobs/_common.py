@@ -8,6 +8,7 @@ import logging
 import os
 from collections.abc import Iterator
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -71,6 +72,61 @@ def write_back(payload: dict[str, Any], *, dry_run: bool = False) -> None:
     )
     response.raise_for_status()
     log.info("wrote back %d bytes -> %s", len(body), response.status_code)
+
+
+def archive_simulation(
+    document: dict[str, Any],
+    *,
+    asset: str,
+    as_of: str,
+    dry_run: bool = False,
+) -> None:
+    """PUT one Monte Carlo run's per-path outcomes to R2 (§11).
+
+    Never fatal. The archive is for offline analysis; a daily run that published
+    its state and its quantiles has done its job, and losing tonight's path
+    outcomes to a network blip is not worth failing the run and losing those
+    too. The failure is logged at WARNING and the run continues — which is a
+    deliberate asymmetry with `write_back`, where a failure means the published
+    numbers are missing and the run really has failed.
+    """
+    log = logging.getLogger("findynamics.simulations")
+    body = json.dumps(document, separators=(",", ":"), sort_keys=True)
+
+    if dry_run:
+        log.info("dry run: withholding %d byte simulation archive", len(body))
+        return
+
+    endpoint = os.environ.get("FINDYN_ADMIN_URL")
+    secret = os.environ.get("ADMIN_HMAC_SECRET")
+    if not endpoint or not secret:
+        log.warning("no admin credentials; skipping the simulation archive")
+        return
+
+    base = endpoint.rstrip("/")
+    if base.endswith("/results"):
+        base = base[: -len("/results")]
+    url = f"{base}/simulations/{quote(asset, safe='')}/{quote(as_of, safe='')}"
+
+    timestamp, signature = sign_payload(secret, body)
+    try:
+        response = httpx.put(
+            url,
+            content=body,
+            headers={
+                "content-type": "application/json",
+                "x-findyn-timestamp": timestamp,
+                "x-findyn-signature": signature,
+            },
+            timeout=120.0,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as err:
+        log.warning("simulation archive failed (%s); the run continues", err)
+        return
+    log.info(
+        "archived %d bytes of %s paths for %s -> %s", len(body), asset, as_of, response.status_code
+    )
 
 
 def chunk_on(

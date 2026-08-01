@@ -3,6 +3,7 @@ import type { Env } from '../types';
 import { verifyHmac } from './hmac';
 import { PayloadError, applyWriteBack, validatePayload } from './writeback';
 import { ArtifactError, getArtifact, listVersions, putArtifact } from './artifacts';
+import { SimulationError, getSimulation, listSimulations, putSimulation } from './simulations';
 
 type Vars = { rawBody: string };
 
@@ -71,6 +72,13 @@ admin.post('/results', async (c) => {
 function artifactFailure(err: unknown) {
   if (err instanceof ArtifactError) {
     return { body: { error: 'artifact_error', message: err.message }, status: err.status };
+  }
+  throw err;
+}
+
+function simulationFailure(err: unknown) {
+  if (err instanceof SimulationError) {
+    return { body: { error: 'simulation_error', message: err.message }, status: err.status };
   }
   throw err;
 }
@@ -148,6 +156,84 @@ admin.get('/artifacts/:name/:version', async (c) => {
     });
   } catch (err) {
     const failure = artifactFailure(err);
+    return c.json(failure.body, failure.status);
+  }
+});
+
+/**
+ * §11 — archive one Monte Carlo run's per-path outcomes.
+ *
+ * Behind the same HMAC door as everything else here, and deliberately not on the
+ * public API: the quantiles are what a caller wants and `/api/v1/forecast`
+ * already serves them.
+ */
+admin.put('/simulations/:asset/:as_of', async (c) => {
+  const body = c.get('rawBody');
+
+  let declared: { model_version?: string; as_of?: string };
+  try {
+    declared = JSON.parse(body) as { model_version?: string; as_of?: string };
+  } catch {
+    return c.json({ error: 'bad_request', message: 'simulation body must be JSON' }, 400);
+  }
+  if (!declared.model_version) {
+    return c.json(
+      {
+        error: 'bad_request',
+        message:
+          'simulation body must carry model_version; a run that cannot name the model it came from is not evidence about anything',
+      },
+      400,
+    );
+  }
+
+  const asOf = c.req.param('as_of');
+  if (declared.as_of && declared.as_of !== asOf) {
+    return c.json(
+      {
+        error: 'bad_request',
+        message: `path as_of ${asOf} disagrees with the body's as_of ${declared.as_of}`,
+      },
+      400,
+    );
+  }
+
+  try {
+    const result = await putSimulation(
+      c.env,
+      c.req.param('asset'),
+      asOf,
+      declared.model_version,
+      body,
+    );
+    return c.json({ ok: true, ...result }, result.created ? 201 : 200);
+  } catch (err) {
+    const failure = simulationFailure(err);
+    return c.json(failure.body, failure.status);
+  }
+});
+
+admin.get('/simulations/:asset/:as_of/:version', async (c) => {
+  try {
+    const body = await getSimulation(
+      c.env,
+      c.req.param('asset'),
+      c.req.param('as_of'),
+      decodeURIComponent(c.req.param('version')),
+    );
+    return new Response(body, { headers: { 'content-type': 'application/json' } });
+  } catch (err) {
+    const failure = simulationFailure(err);
+    return c.json(failure.body, failure.status);
+  }
+});
+
+admin.get('/simulations/:asset', async (c) => {
+  try {
+    const runs = await listSimulations(c.env, c.req.param('asset'));
+    return c.json({ asset: c.req.param('asset'), count: runs.length, runs });
+  } catch (err) {
+    const failure = simulationFailure(err);
     return c.json(failure.body, failure.status);
   }
 });

@@ -1044,6 +1044,33 @@ class EquityEngine(AssetEngine):
             rows.extend(self._output_rows(column, view.crash[column].loc[cutoff:]))
         return rows
 
+    def simulation_archive(self, world: WorldState) -> dict[str, Any] | None:
+        """§11's R2 path archive, or ``None`` when there is nothing to archive.
+
+        Per-path *outcomes*, not step-by-step paths — see
+        :class:`~findynamics.engines.equity.simulate.PathSample` for why 1.5 GB a
+        night of intermediate states is the wrong trade. Separate from
+        :meth:`forecasts` because the two go to different places for different
+        reasons: quantiles are the published contract and go to D1, the archive
+        is evidence for offline analysis and goes to R2.
+        """
+        try:
+            analysis = self.analyze(world)
+        except StateUnavailable:
+            return None
+
+        view = analysis.instability
+        if view is None or view.simulation is None:
+            return None
+
+        as_of = analysis.as_of or world.as_of
+        return simulate_mod.archive_document(
+            view.simulation,
+            asset=self.name,
+            as_of=as_of.isoformat(),
+            model_version=analysis.model_version,
+        )
+
     def forecasts(self, world: WorldState) -> tuple[ForecastQuantile, ...]:
         """§10's quantile distributions. Quantiles only, by contract and by schema."""
         try:

@@ -1,9 +1,14 @@
 # UI Evolution Plan — visible features per phase
 
-The live site (`findyn.<account>.workers.dev`) currently shows only the
-system-status instrument panel, because every model endpoint is `501` until
-its engine ships. This plan makes **every phase end with a visible upgrade to
-the deployed site**, not just green tests.
+This plan makes **every phase end with a visible upgrade to the deployed
+site**, not just green tests.
+
+As of P3-C the home page is a market overview — regime, velocity, instability,
+the three crash factors and the forecast bands — and the system-status
+instrument panel it replaced lives at `/status`, intact. Every endpoint
+`FINDYN_V1_SPEC.md` §13 names now answers; the `501`-with-a-milestone
+convention below stays for the engines still to come, and an unpublished engine
+(`/assets/gold/state`) still uses it.
 
 ## Global rules (all phases)
 

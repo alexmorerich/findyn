@@ -471,3 +471,54 @@ def test_rii_diagnostics_measure_episode_peaks_against_calm_means() -> None:
     assert result.calm_readings["1995"] == pytest.approx(30.0)
     assert result.gap > 0
     assert result.component_gaps["jerk"] > 0
+
+
+def test_the_archive_holds_per_path_outcomes_not_paths() -> None:
+    """§11's R2 archive, and the trade it makes explicit.
+
+    The spec asks for path bundles in R2. Written literally that is 10,000 x
+    12,600 floats for the 50-year horizon alone — about 1.5 GB a night across the
+    horizons, forever, to answer questions nobody has asked. What offline
+    analysis needs is each path's *outcome*, which is three arrays and roughly a
+    thousandth of the size: any quantile and any drawdown threshold can be
+    re-derived from them. Path-dependent statistics cannot, and that cost is
+    stated in the payload rather than left for a reader to discover.
+    """
+    result = small_run(paths=200)
+    document = simulate.archive_document(
+        result, asset="equity", as_of="2026-08-01", model_version="equity-1.1.0+cal.x"
+    )
+
+    assert document["model_version"] == "equity-1.1.0+cal.x"
+    # Reproducibility: the seed and the conditioning state travel with the paths,
+    # or a year later the numbers are outcomes of nothing in particular.
+    assert document["seed"] == result.seed
+    assert document["start_log_level"] == result.start_log_level
+    assert "shock_intensity" in document
+
+    tactical = document["horizons"]["tactical"]
+    assert len(tactical["terminal"]) == 200
+    assert len(tactical["max_drawdown"]) == 200
+    assert len(tactical["time_under_water"]) == 200
+    assert tactical["educational_only"] is False
+
+    # The quantiles the API publishes must be re-derivable from the archive,
+    # which is the property that makes it worth storing at all. To the archive's
+    # own stated precision: outcomes are rounded to six decimals, which on a log
+    # index level is under a basis point and halves the payload.
+    import numpy as np
+
+    assert float(np.quantile(tactical["terminal"], 0.5)) == pytest.approx(
+        result.forecasts["tactical"].median_log_level, abs=1e-6
+    )
+
+
+def test_the_archive_is_json_safe() -> None:
+    """It is serialized straight into an HMAC-signed PUT; a numpy float would
+    raise there, in a job, at night, rather than here."""
+    import json
+
+    document = simulate.archive_document(
+        small_run(paths=50), asset="equity", as_of="2026-08-01", model_version="v1"
+    )
+    assert json.loads(json.dumps(document))["horizons"]["tactical"]["paths"] == 50
