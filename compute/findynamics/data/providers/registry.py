@@ -21,6 +21,7 @@ from findynamics.core.registry import RegistryError, provider_factory, register_
 from findynamics.data.providers.base import Provider, ProviderError
 from findynamics.data.providers.bea import BeaProvider
 from findynamics.data.providers.bls import BlsProvider
+from findynamics.data.providers.derived import DerivedProvider
 from findynamics.data.providers.fred import FredProvider
 from findynamics.data.providers.lbma import LbmaProvider
 from findynamics.data.providers.mock import MockProvider
@@ -64,6 +65,9 @@ QUOTAS: Mapping[str, Quota] = {
     "bls": Quota(5, 0.05, 1.0, 4, 120.0, 3, "BLS v2 allows 500 req/day with a key"),
     "bea": Quota(10, 0.5, 0.5, 4, 120.0, 3, "BEA allows 100 req/min, 100MB/day"),
     "engine_output": Quota(20, 5.0, 0.0, 3, 30.0, 2, "our own Worker; no published quota"),
+    # Same target as engine_output — our own Worker — but one derived series
+    # fans out into several input reads, so the burst allowance is larger.
+    "derived": Quota(30, 8.0, 0.0, 3, 30.0, 2, "our own Worker; several reads per series"),
     # Undocumented and IP-throttled: a 429 is routine rather than exceptional,
     # so this is the most conservative pacing of any source here.
     "yahoo": Quota(2, 0.2, 2.0, 3, 300.0, 3, "unofficial; throttles hard by source IP"),
@@ -80,13 +84,13 @@ KEY_ENV = {
 
 #: Providers that reach the network and therefore need a transport.
 NETWORK_PROVIDERS = frozenset(
-    {"fred", "shiller", "stooq", "bls", "bea", "engine_output", "yahoo", "lbma"}
+    {"fred", "shiller", "stooq", "bls", "bea", "engine_output", "yahoo", "derived", "lbma"}
 )
 
 #: Providers usable with no credential at all. ``engine_output`` needs no key but
 #: does need to be told where the serving plane is; when it is not, it reports no
 #: observations and the consuming engine degrades (see its module docstring).
-KEYLESS_PROVIDERS = frozenset({"shiller", "stooq", "engine_output", "yahoo", "lbma"})
+KEYLESS_PROVIDERS = frozenset({"shiller", "stooq", "engine_output", "yahoo", "derived", "lbma"})
 
 #: The network adapters, published by name. ``mock`` is deliberately absent:
 #: reaching synthetic data must stay a deliberate act through ``build_provider``
@@ -98,6 +102,7 @@ for _name, _cls in (
     ("bls", BlsProvider),
     ("bea", BeaProvider),
     ("engine_output", PublishedOutputProvider),
+    ("derived", DerivedProvider),
     ("yahoo", YahooProvider),
     ("lbma", LbmaProvider),
 ):
@@ -176,8 +181,9 @@ def build_provider(
 
     if provider_id in KEY_ENV:
         return factory(transport, api_key=environment.get(KEY_ENV[provider_id]))
-    # Published outputs are configured by location rather than by credential.
-    if provider_id == "engine_output":
+    # Published outputs and derived series are configured by location rather
+    # than by credential: both read the serving plane rather than a vendor.
+    if provider_id in {"engine_output", "derived"}:
         return factory(transport, base_url=resolve_api_base(environment))
     return factory(transport)
 
@@ -187,7 +193,7 @@ def available_providers(env: Mapping[str, str] | None = None) -> dict[str, bool]
     environment = env if env is not None else os.environ
     status: dict[str, bool] = {}
     for provider_id in sorted(NETWORK_PROVIDERS):
-        if provider_id == "engine_output":
+        if provider_id in {"engine_output", "derived"}:
             # Keyless, but useless without somewhere to read from.
             status[provider_id] = resolve_api_base(environment) is not None
         elif provider_id in KEYLESS_PROVIDERS:

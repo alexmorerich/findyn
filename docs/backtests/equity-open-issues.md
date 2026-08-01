@@ -490,6 +490,59 @@ engine happened to author the document.
 
 ---
 
+## 18. RESOLVED — a test defended the missing DERIVED provider
+
+**Status:** fixed. Recorded because the test suite did not *miss* this one. It
+had found it, and written it down as expected behaviour.
+
+`series.yaml` declared two factor inputs — `DERIVED:EXCESS_CAPE_YIELD`
+(valuation) and `DERIVED:HY_IG_DIFFERENTIAL` (risk appetite) — with
+`provider: derived`. No such provider existed. Every run logged
+`cannot build provider derived: unknown provider 'derived'` at ERROR and carried
+on, and both factors published scores computed from fewer inputs than they named,
+with nothing in the output saying so.
+
+The part worth keeping is why it survived. `test_every_provider_the_config_accepts_is_buildable`
+asserted:
+
+```python
+assert VALID_PROVIDERS - {"derived"} == NETWORK_PROVIDERS
+```
+
+with the note *"`derived` is the single exception: computed downstream, never
+built."* Nothing computed it downstream. Someone hit the failure, concluded it
+was intentional, wrote the exemption with a plausible-sounding justification, and
+the suite went green — which then gave every later reader a reason not to look.
+**A test that encodes a bug as expected behaviour is worse than no test: it
+actively defends the bug.** The assertion is now an exact set equality, and that
+equality is what proves the provider is real.
+
+Three things landed:
+
+- **`data/providers/derived.py`.** Recipes as a table, inputs read back through
+  the serving plane so the derived series and the rest of the system agree about
+  history, and — the reason it is a module rather than arithmetic inside a factor
+  — **the release date is the maximum over the inputs**. `series.yaml` gives the
+  excess CAPE yield a 30-day lag; synthesizing from that would claim January's
+  value was knowable on 31 January, while it depends on a CAPE print that lands
+  weeks later. Every date in between would be lookahead carrying a release date
+  that *looked* legitimate.
+- **Two questions, kept apart.** Which values pair is answered by observation
+  date (January's CAPE with January's rate); when the pair becomes knowable is
+  answered by the maximum release date over exactly those observations. I had
+  these conflated in the first draft — pairing on release dates put mid-February's
+  rate beside January's valuation, which is economically wrong and invisible in
+  the output. The test that caught it is
+  `test_values_pair_by_period_and_the_release_date_is_computed_after`.
+- **`load_observations` now raises on an unbuildable provider.** §14.2's
+  tolerance is for provider *failures* — the API is down, the key expired — where
+  losing one series is the right price. A provider that cannot be **built** is a
+  configuration error: every run degrades identically and retrying changes
+  nothing. That distinction is the actual fix; the adapter is just the thing that
+  made it safe to enforce.
+
+---
+
 ## Smaller things
 
 - **`derived_features` and `engine_output` overlap.** The kinematic path is

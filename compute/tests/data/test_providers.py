@@ -560,10 +560,18 @@ def test_every_provider_the_config_accepts_is_buildable():
     """VALID_PROVIDERS may only name providers that actually exist.
 
     The config once accepted `alphavantage` and `yahoo` with no adapter behind
-    them, so a series pointed at one passed validation and failed at fetch
-    time. `derived` is the single exception: computed downstream, never built.
+    them, so a series pointed at one passed validation and failed at fetch time.
+
+    This assertion used to read ``VALID_PROVIDERS - {"derived"}``, carrying the
+    note "computed downstream, never built". Nothing computed it. Two factor
+    inputs went unfetched for months while this test stayed green, because the
+    exemption made the gap look deliberate and gave every later reader a reason
+    not to check. A test that encodes a bug as expected behaviour is worse than
+    no test: it actively defends the bug.
+
+    The set equality is now exact, and it is what proves `derived` is real.
     """
     from findynamics.core.config import VALID_PROVIDERS
     from findynamics.data.providers.registry import NETWORK_PROVIDERS
 
-    assert VALID_PROVIDERS - {"derived"} == NETWORK_PROVIDERS
+    assert VALID_PROVIDERS == NETWORK_PROVIDERS

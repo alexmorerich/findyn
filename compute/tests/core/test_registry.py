@@ -263,10 +263,11 @@ def test_a_registered_engine_can_run_end_to_end(pit_accessor):
 def test_the_data_layer_populated_the_provider_registry():
     """Discovery by name is the point; an empty table means nobody imported it.
 
-    ``engine_output`` is in here with the external sources on purpose: an engine's
-    published output is fetched over HTTP through the same protected transport as
-    FRED, and treating it as a provider is what lets one engine consume another's
-    work without importing it.
+    ``engine_output`` and ``derived`` are in here with the external sources on
+    purpose. Both are fetched over HTTP through the same protected transport as
+    FRED — one is another engine's published output, the other is arithmetic over
+    series already in the store — and treating them as providers is what lets a
+    consumer read either without importing the code that produced it.
     """
     import findynamics.data.providers  # noqa: F401  (import triggers registration)
 
@@ -278,6 +279,7 @@ def test_the_data_layer_populated_the_provider_registry():
         "bea",
         "engine_output",
         "yahoo",
+        "derived",
         # P4. The London bullion benchmark, read from the body that sets it —
         # FRED delisted the LBMA gold series it used to carry, so there is no
         # longer a FRED route to the fix at all.
