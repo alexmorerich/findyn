@@ -543,6 +543,51 @@ Three things landed:
 
 ---
 
+## 19. RESOLVED — the quality gate withheld every series that can touch zero
+
+**Status:** fixed. Found by running the first full FRED backfill, not by any test.
+
+The backfill reported `23 series ok, 15 withheld`. All fifteen failed the same
+check, `abnormal_jump`, and all fifteen were correct data:
+
+| withheld | why the relative test failed |
+|---|---|
+| DGS1MO, DGS3MO, DGS6MO, DTB3, SOFR | short rates sit near zero; 0.07% → 0.26% is **+271%** and nineteen basis points |
+| T10Y2Y, T10Y3M | term spreads invert, so the denominator crosses zero |
+| NFCI, STLFSI4 | standardized indices centred on zero — they cross it constantly |
+| DFII10 | TIPS real yields were negative for most of 2011-2021 |
+| RRPONTSYD | a balance that starts at zero |
+| DRTSCILM | a net-percentage survey oscillating around zero |
+| ICSA, UNRATE | one genuine 2020 print each |
+
+That is the entire short end of the curve plus both financial-conditions
+indices — the core inputs to FinRates, FinMoney and the RII's liquidity
+component.
+
+The check computed `(curr - prev) / abs(prev)` and skipped only the exact
+`prev == 0` case. Near-zero was not handled, and **near-zero is where every rate,
+spread and standardized index in this system spends part of its life**. A
+percentage change is meaningless when its denominator is.
+
+The fix is not a looser threshold — that would have traded these false positives
+for real misses. It is to notice when the denominator cannot carry a percentage:
+below a fraction of the series' own median magnitude, the check falls back to an
+**absolute** comparison against that same magnitude. Scale is taken from the
+series itself, so it works without knowing whether the numbers are percentages,
+index levels or dollar balances. Series that never approach zero are unaffected
+and keep the original test exactly.
+
+Both directions are pinned: a rate going 0.07 → 0.26 passes, a hundredfold
+decimal slip from the same 0.07 still fails, and a 3000 → 30000 index error is
+still caught by the relative path.
+
+**`--force` was available and would have been the wrong tool.** It writes through
+the quality gate wholesale, so it would have imported these fifteen *and*
+silenced any real defect among them, and the next backfill would have hit the
+same wall. The gate was wrong; the answer was to fix the gate.
+
+---
+
 ## Smaller things
 
 - **`derived_features` and `engine_output` overlap.** The kinematic path is

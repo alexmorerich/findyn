@@ -93,6 +93,14 @@ class QualityPolicy:
     min_coverage: float = 0.8
     #: Series whose values are legitimately allowed to be non-positive.
     allow_non_positive: bool = False
+    #: A relative change is only meaningful when its denominator is. Below this
+    #: fraction of the series' own typical magnitude, the previous value is too
+    #: near zero for a percentage to mean anything and the jump check falls back
+    #: to an absolute comparison. See `_jump_check` for what this cost.
+    relative_jump_floor_fraction: float = 0.1
+    #: Absolute move, as a multiple of the series' typical magnitude, that counts
+    #: as a jump when the relative test is not usable.
+    error_absolute_jump_factor: float = 2.0
 
 
 #: Largest plausible gap between consecutive observations, in days, before it
@@ -387,11 +395,45 @@ def _check_jumps(
     if len(series) < 2:
         return
 
+    # The series' own typical magnitude, robustly. This is what makes "is the
+    # denominator meaningful?" answerable without knowing whether the series is
+    # a percentage, an index level or a dollar balance.
+    magnitudes = [abs(o.value) for o in series if o.value == o.value]
+    scale = statistics.median(magnitudes) if magnitudes else 0.0
+    floor = scale * policy.relative_jump_floor_fraction
+
     changes: list[tuple[Observation, float]] = []
     for prev, curr in zip(series, series[1:], strict=False):
-        if prev.value == 0:
+        delta = curr.value - prev.value
+        if abs(prev.value) > floor and prev.value != 0:
+            changes.append((curr, delta / abs(prev.value)))
             continue
-        changes.append((curr, (curr.value - prev.value) / abs(prev.value)))
+
+        # The previous value is at or near zero, so a percentage says nothing:
+        # 0.02 -> 0.10 is "+400%" and eight basis points. Every rate, spread and
+        # standardized index in this system crosses or approaches zero, and
+        # judging them on relative change withheld fifteen FRED series at once —
+        # the entire short end of the curve, both financial-conditions indices
+        # and both term spreads — for moves that were real, small and correct.
+        #
+        # Absolute change against the series' own scale instead. A genuine
+        # decimal error still trips it; a rate going from 2bp to 10bp does not.
+        if scale > 0 and abs(delta) > scale * policy.error_absolute_jump_factor:
+            report.errors.append(
+                Finding(
+                    "abnormal_jump",
+                    f"{curr.observation_date} moves {delta:+.4g} from {prev.value:.4g}, "
+                    f"beyond {policy.error_absolute_jump_factor:g}x the series' typical "
+                    f"magnitude ({scale:.4g}); the previous value was too near zero for a "
+                    "relative test",
+                    "error",
+                    {
+                        "observation_date": curr.observation_date.isoformat(),
+                        "absolute_change": delta,
+                        "series_scale": scale,
+                    },
+                )
+            )
 
     if not changes:
         return
