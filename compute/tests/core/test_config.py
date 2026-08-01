@@ -62,21 +62,21 @@ def test_equity_series_ids_are_provider_native():
 def test_only_engines_whose_phase_has_landed_are_enabled():
     """An engine enabled before it can publish anything would be noise daily.
 
-    P1 shipped rates, P2 shipped money, P3-A shipped equity's feature path. Gold
-    and crypto are configured but disabled, which is the correct state for an
-    engine that does not exist — and the ordering is ASSETS order, not config
-    order, so a run is deterministic.
+    P1 shipped rates, P2 shipped money, P3 shipped equity, P4 shipped gold.
+    Crypto is configured but disabled, which is the correct state for an engine
+    that does not exist — and the ordering is ASSETS order, not config order, so
+    a run is deterministic.
 
-    Equity is enabled while it still publishes no ``AssetState``: it publishes
-    real features on every run and declines the state (``StateUnavailable``)
-    until the regime model lands in P3-B. "Enabled" means "has something to say",
-    not "has everything to say".
+    "Enabled" means "has something to say", not "has everything to say". Equity
+    was enabled in P3-A while it still published no ``AssetState``, and gold
+    behaves the same way before its first ``monthly_refit``: it publishes the
+    driver panel, the jump intensity and the price history every run, and
+    declines the state (``StateUnavailable``) until a chain is fitted.
     """
     config = load_series_config()
-    assert config.enabled_engine_names() == ("money", "rates", "equity")
+    assert config.enabled_engine_names() == ("money", "rates", "equity", "gold")
     assert set(config.engines) == {"money", "rates", "equity", "gold", "crypto"}
-    for unbuilt in ("gold", "crypto"):
-        assert not config.is_enabled(unbuilt)
+    assert not config.is_enabled("crypto")
 
 
 def test_the_rates_engine_declares_its_curve_in_config_not_code():

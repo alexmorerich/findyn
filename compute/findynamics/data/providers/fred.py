@@ -42,6 +42,12 @@ MAX_VINTAGE_DATES = 2000
 #: Page size for the vintagedates endpoint (its documented maximum).
 VINTAGE_PAGE = 10000
 
+#: Rows the observations endpoint returns at most, and its documented maximum
+#: ``limit``. A response of exactly this length is a *truncated* one: FRED does
+#: not say so, it simply stops, and the rows it stops after are the oldest
+#: periods of the oldest vintage.
+MAX_OBSERVATION_ROWS = 100000
+
 _FREQUENCY = {
     "D": "daily",
     "W": "weekly",
@@ -261,6 +267,37 @@ class FredProvider(Provider):
             rows = payload.get("observations")
             if rows is None:
                 raise ParseError(self.id, f"{series_id}: response has no observations array")
+
+            # A vintage archive that restates its whole history every release —
+            # NFCI recomputes 2,900 weeks on each of 789 vintages — asks for
+            # millions of rows and gets the first hundred thousand. Those rows
+            # are the OLDEST periods of the OLDEST vintage, so the series comes
+            # back looking complete and ending twenty years early. Nothing
+            # downstream re-examines an observation's coverage, so this went
+            # unnoticed until a model asked NFCI what 2008 looked like and was
+            # told the series stops in 2005.
+            #
+            # Vintage fidelity is not recoverable here at any page size, so it is
+            # abandoned deliberately and loudly: refetch with no real-time window
+            # at all, take today's values, and let the release dates fall back to
+            # the configured publication lag through data/vintages.py — the same
+            # treatment every source without an archive already gets.
+            if len(rows) >= MAX_OBSERVATION_ROWS and window is not None:
+                log.warning(
+                    "%s: the vintage archive exceeds FRED's %d-row response cap, so the "
+                    "response is a truncated prefix rather than the series. Refetching "
+                    "current values only; release dates fall back to the configured "
+                    "publication lag and revisions are not observable for this series.",
+                    series_id,
+                    MAX_OBSERVATION_ROWS,
+                )
+                payload = self._get("series/observations", dict(base))
+                rows = payload.get("observations")
+                if rows is None:
+                    raise ParseError(self.id, f"{series_id}: response has no observations array")
+                parsed = self._parse_rows(rows)
+                break
+
             parsed.extend(self._parse_rows(rows))
 
         # Splitting the window clamps each chunk's realtime_start to the chunk

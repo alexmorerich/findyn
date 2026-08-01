@@ -40,6 +40,10 @@ VALID_PROVIDERS = frozenset(
         "bls",
         "bea",
         "stooq",
+        # The London bullion benchmark, read from the body that sets it. FRED
+        # delisted the LBMA gold series it used to carry, so there is no longer a
+        # FRED route to the fix (data/providers/lbma.py).
+        "lbma",
         # Fallback only, and isolated behind one adapter so it stays deletable
         # (FINDYN_V1_SPEC.md §5.1 source 7).
         "yahoo",

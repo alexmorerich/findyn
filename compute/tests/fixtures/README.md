@@ -83,3 +83,47 @@ passed.
   what D1 actually holds.
 
 Regenerate the same way as above.
+
+## `gold_daily.csv`
+
+The gold fix and its four drivers, so the regime backtest asserts against 1980,
+2008 and 2020 as they happened rather than against a series invented until the
+windows passed.
+
+* **Source**: `LBMA:GOLD_PM` plus FRED `DGS10`, `T10YIE`, `CPIAUCSL`,
+  `DTWEXBGS`, `DTWEXM`, `NFCI`, `NASDAQ100`.
+* **Shape**: one row per vintage, 1968-01 to 2026-07, 105,642 rows. Daily is
+  unavoidable: the jump detector's unit of observation is a session, and
+  15 April 2013 was a one-day event.
+* **The price is not from FRED.** `FRED:GOLDPMGBD228NLBM` is what the P4 brief
+  names and it no longer exists — FRED delisted the whole ICE Benchmark
+  Administration set, and both the AM and PM series now answer
+  `400 The series does not exist` (verified 2026-08-01 with a working key).
+  LBMA publishes the same benchmark itself as static JSON, from 1968-04-01,
+  which is more history than FRED ever carried. See
+  `findynamics/data/providers/lbma.py`.
+* **Why it starts in 1968 rather than at the first driver.** The drivers are
+  only complete from 1974, but the fit window is what makes the model
+  identifiable, and 1979-82 is the only unambiguous rate shock in the record:
+  the real 10y went from -5% to +8% and gold fell 60%. Fitted on 1985 onwards
+  the chain has never seen a carry headwind and cannot name one — measured in
+  the walk-forward backtest rather than assumed.
+* **Two spliced drivers, both flagged rather than blended.** `T10YIE` starts in
+  2003, so before it the real rate is nominal minus trailing CPI (a different,
+  ex-post quantity). `DTWEXBGS` starts in 2006 and `DTWEXM` ends in 2019, so
+  the dollar trend is spliced on the 12-month *change* — the two are different
+  baskets at different base levels, and a level splice would print a
+  twenty-point step in 2006 that no dollar move produced.
+* **`NFCI` carries no vintages here, and that is a repair rather than a gap.**
+  Its ALFRED archive restates all 2,899 weeks on each of 789 vintages, which
+  asks FRED for millions of rows and gets the first hundred thousand — the
+  oldest periods of the oldest vintage. Fetched naively the series looks
+  complete and stops in 2005. `providers/fred.py` now detects that truncation
+  and refetches current values only, so release dates come from the configured
+  7-day lag and revisions are not observable for this series.
+* **Everything else keeps its vintages**, which is why the row count is several
+  times the number of distinct (series, date) pairs: the dollar indices are
+  reweighted annually and DGS10 is revised. `tests/engines/gold/test_replay.py`
+  strips them for its cross-cutoff comparisons and explains why.
+
+Regenerate the same way as above.

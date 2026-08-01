@@ -258,7 +258,11 @@ export const ENGINE_LABELS: Record<string, { title: string; blurb: string; href?
     blurb: 'Growth and risk premium — kinematics, regimes, instability',
     href: '/equity',
   },
-  gold: { title: 'FinGold', blurb: 'Trust and crisis protection — regime switching on real rates' },
+  gold: {
+    title: 'FinGold',
+    blurb: 'Trust and crisis protection — regime switching on real rates',
+    href: '/gold',
+  },
   crypto: { title: 'FinCrypto', blurb: 'Network scarcity — experimental, excluded from portfolios' },
 };
 
