@@ -28,6 +28,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
+from findynamics.core.retry import RetryPolicy
 from findynamics.data.providers.base import ProviderError, RateLimitError
 
 log = logging.getLogger("findynamics.data.providers.resilience")
@@ -246,24 +247,12 @@ class CircuitBreaker:
 # Retry
 # --------------------------------------------------------------------------
 
-
-@dataclass(frozen=True)
-class RetryPolicy:
-    """Exponential backoff with full jitter."""
-
-    max_attempts: int = 3
-    base_delay: float = 0.5
-    max_delay: float = 30.0
-    jitter: bool = True
-
-    def delay_for(self, attempt: int, rng: random.Random) -> float:
-        """Backoff before ``attempt`` (1-based); attempt 1 never waits."""
-        if attempt <= 1:
-            return 0.0
-        ceiling = min(self.max_delay, self.base_delay * (2 ** (attempt - 2)))
-        # Full jitter: sampling in [0, ceiling] avoids synchronised retry storms
-        # when several series fail against the same provider at once.
-        return rng.uniform(0.0, ceiling) if self.jitter else ceiling
+#: :class:`~findynamics.core.retry.RetryPolicy` is imported at the top of this
+#: module rather than defined here. It moved to ``core.retry`` in P4 so the
+#: artifact store and the write-back could share it — ``core`` may not import
+#: ``data``, so leaving it here would have meant a second exponential backoff
+#: with its own constants, free to drift from this one. Every existing
+#: ``from ...resilience import RetryPolicy`` still resolves.
 
 
 # --------------------------------------------------------------------------

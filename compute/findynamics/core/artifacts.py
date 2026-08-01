@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import quote
 
+from findynamics.core.retry import is_transient_http, retry_call
 from findynamics.core.signing import headers as sign_headers
 
 log = logging.getLogger("findynamics.core.artifacts")
@@ -206,11 +207,24 @@ class RemoteArtifactStore:
 
         version, fit = split_pin(self._version) if self._version else ("latest", None)
         url = self._url(name, version, fit)
+
+        # The module-level helper, not a pooled client: `httpx.get` opens and
+        # closes a connection per call, which is exactly what a retry after a
+        # half-open socket needs.
+        def get() -> httpx.Response:
+            return httpx.get(url, headers=sign_headers(self._secret, ""), timeout=self._timeout)
+
         try:
-            response = httpx.get(
-                url,
-                headers=sign_headers(self._secret, ""),
-                timeout=self._timeout,
+            # Retried before degrading, and the order matters. Degrading is the
+            # right answer to "no fit exists yet" and the wrong one to "the
+            # socket died": one dropped GET during the P4 publish made FinEquity
+            # publish a run with no regime model, which looks exactly like a
+            # model that was never fitted and is impossible to tell apart after
+            # the fact.
+            response = retry_call(
+                get,
+                retry_on=is_transient_http,
+                description=f"artifact fetch {name}@{version}",
             )
         except httpx.HTTPError as err:
             log.warning("artifact %s unreachable (%s); continuing without it", url, err)
@@ -278,14 +292,26 @@ class RemoteArtifactStore:
         document = {**payload, FIT_FIELD: fit}
         body = json.dumps(document, indent=2, sort_keys=True)
         url = self._url(name, version)
-        response = httpx.put(
-            url,
-            content=body,
-            headers={
-                "content-type": "application/json",
-                **sign_headers(self._secret, body),
-            },
-            timeout=self._timeout,
+
+        def put() -> httpx.Response:
+            return httpx.put(
+                url,
+                content=body,
+                headers={
+                    "content-type": "application/json",
+                    **sign_headers(self._secret, body),
+                },
+                timeout=self._timeout,
+            )
+
+        # A 409 is not retried and must not be: it means this version was already
+        # fitted on this date with different bytes, which is a conflict no amount
+        # of waiting resolves. `is_transient_http` only sees exceptions, and the
+        # status is checked below rather than raised, so 409 never reaches it.
+        response = retry_call(
+            put,
+            retry_on=is_transient_http,
+            description=f"artifact store {name}@{version}",
         )
         if response.status_code == 409:
             raise ValueError(
