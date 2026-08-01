@@ -221,6 +221,41 @@ engines:
       # learns that FinMoney exists.
       risk_free:        {id: "ENGINE:money.short_rate", provider: engine_output, frequency: daily, publication_lag_days: 0}
 
+  gold:
+    # FinGold's inputs (Phase 4). Gold has no cash flow, so there is no
+    # valuation series here and never will be — the engine models *drivers*.
+    series:
+      # LBMA London PM fix, USD/oz. Daily, one business day of lag. The PM fix
+      # rather than AM: it is the benchmark most contracts settle against, and
+      # mixing the two would put a several-hour timing break in the middle of a
+      # single series.
+      price: {id: "FRED:GOLDPMGBD228NLBM", provider: fred, frequency: daily, publication_lag_days: 1}
+
+      # The driver panel (P4 §2). Every one of these is already ingested for a
+      # shared factor or another engine; naming them here declares the ROLE each
+      # plays for gold, which is not derivable from the fact that someone else
+      # wants the same id. Loaders de-duplicate by id.
+      #
+      # Real rate: the carry cost of holding a non-yielding asset. Nominal 10y
+      # minus breakeven, both as levels — drivers.py takes the 12m change too.
+      nominal_10y:  {id: "FRED:DGS10",     provider: fred, frequency: daily, publication_lag_days: 1}
+      breakeven_10y: {id: "FRED:T10YIE",   provider: fred, frequency: daily, publication_lag_days: 1}
+      # Broad trade-weighted dollar. Gold is priced in USD, so dollar strength is
+      # a mechanical headwind before any behavioural story about it.
+      usd_index:    {id: "FRED:DTWEXBGS",  provider: fred, frequency: daily, publication_lag_days: 1}
+      # Financial conditions, for the stress driver. Weekly, and carrying the
+      # limitation in open issue 13: fetched without vintages because the vintage
+      # path truncates the series, so this reads today's values at historical
+      # dates. Recorded rather than hidden.
+      liquidity_stress: {id: "FRED:NFCI",  provider: fred, frequency: weekly, publication_lag_days: 7}
+
+      # FinEquity's instability index, read back as DATA (§3 rule 2). This is the
+      # crisis-premium input, and routing it through the engine_output provider
+      # rather than the equity engine is the whole point: gold learns what the
+      # equity RII *is* without learning that FinEquity *exists*, and
+      # `lint-imports` enforces that it stays that way.
+      equity_rii:   {id: "ENGINE:equity.rii", provider: engine_output, frequency: daily, publication_lag_days: 0}
+
 # Cached in KV with a short TTL for the dashboard's live tiles (§6).
 realtime_cache:
   ttl_seconds: 900
