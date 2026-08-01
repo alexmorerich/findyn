@@ -25,11 +25,23 @@ Composing point-in-time series means composing their release dates, and the
 composition is a maximum: a derived value is knowable only once its slowest
 input is.
 
-Inputs are read back through the serving plane rather than re-fetched from FRED,
-for the same reason :mod:`.published` does it: whatever the rest of the system
-is using for CAPE is what this must use, or the derived series and its own
-inputs disagree about history. That read is also where the real release dates
-come from — a fresh FRED fetch would only give today's vintage.
+Inputs come from **their own upstream providers**, not from a read-back of the
+store. That distinction cost a failed production backfill to learn, so it is
+worth stating plainly:
+
+:mod:`.published` reads the serving plane because an engine's output *has* no
+upstream source — the store is its only home. CAPE and DGS10 are not like that.
+Their home is Shiller and FRED, and :mod:`findynamics.data.store` opens by
+explaining why the compute plane always goes to the source: re-reading our own
+store would give back only what we happened to have ingested, at whatever
+vintage we happened to ingest it.
+
+The first version of this module copied the `published` pattern anyway. It
+failed on its first real run with a 404 for every input, because the store held
+nine series and none of them were the ones these recipes need. That was the
+honest outcome — the inputs genuinely were not there — but the design was wrong
+before the data was: FRED's ALFRED endpoint carries true vintages, and reading
+D1 instead would have thrown them away even once the rows existed.
 
 Two questions get answered separately, and conflating them is the mistake this
 docstring exists to prevent:
@@ -52,26 +64,23 @@ second alone mismatches the periods.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date
-from urllib.parse import quote
 
+from findynamics.core.config import SeriesConfig
 from findynamics.data.providers.base import (
     Frequency,
     NotFoundError,
     Observation,
-    ParseError,
     Provider,
     SeriesMetadata,
 )
-from findynamics.data.providers.published import (
-    ADMIN_URL_ENV,
-    API_URL_ENV,
-    CACHE_TTL,
-    resolve_api_base,
-)
 from findynamics.data.providers.resilience import Transport
+
+#: How a provider id becomes a provider. Injectable so a test can supply canned
+#: inputs without a network or a registry.
+ProviderBuilder = Callable[[str], Provider]
 
 log = logging.getLogger("findynamics.data.providers.derived")
 
@@ -163,14 +172,28 @@ class DerivedProvider(Provider):
 
     def __init__(
         self,
-        transport: Transport,
+        transport: Transport | None = None,
         *,
-        base_url: str | None,
+        build: ProviderBuilder | None = None,
+        config: SeriesConfig | None = None,
         limit: int = DEFAULT_LIMIT,
     ) -> None:
+        # `transport` is accepted and unused so this adapter has the same shape as
+        # every other factory in the registry. It reaches no network of its own —
+        # each input's provider brings its own protected transport, with that
+        # source's quota, which is the pacing that actually matters.
         self.transport = transport
-        self.base_url = base_url.rstrip("/") if base_url else None
+        self._build_provider = build
+        self._config = config
+        self._providers: dict[str, Provider] = {}
         self.limit = limit
+
+    def _build(self, provider_id: str) -> Provider:
+        if self._build_provider is not None:
+            return self._build_provider(provider_id)
+        from findynamics.data.providers.registry import build_provider
+
+        return build_provider(provider_id)
 
     def available_series(self) -> list[str]:
         return sorted(RECIPES)
@@ -183,15 +206,6 @@ class DerivedProvider(Provider):
                 f"unknown derived series {series_id!r}; available: {', '.join(sorted(RECIPES))}",
             )
         return recipe
-
-    def _require_base(self) -> str:
-        if not self.base_url:
-            raise NotFoundError(
-                self.id,
-                f"neither {API_URL_ENV} nor {ADMIN_URL_ENV} is set, so there is no "
-                "serving plane to read this series' inputs from",
-            )
-        return self.base_url
 
     def fetch_metadata(self, series_id: str) -> SeriesMetadata:
         recipe = self._recipe(series_id)
@@ -212,9 +226,8 @@ class DerivedProvider(Provider):
         end: date | None = None,
     ) -> list[Observation]:
         recipe = self._recipe(series_id)
-        base = self._require_base()
 
-        loaded = {name: self._load_input(base, name, start, end) for name in recipe.inputs}
+        loaded = {name: self._load_input(name, start, end) for name in recipe.inputs}
 
         missing = [name for name, points in loaded.items() if not points]
         if missing:
@@ -283,58 +296,45 @@ class DerivedProvider(Provider):
 
     def _load_input(
         self,
-        base: str,
         series_id: str,
         start: date | None,
         end: date | None,
     ) -> list[_Point]:
-        """One input series, oldest first, with its real release dates."""
-        params: dict[str, str] = {"limit": str(self.limit)}
-        if start is not None:
-            params["from"] = start.isoformat()
-        if end is not None:
-            params["to"] = end.isoformat()
+        """One input series from its own provider, oldest first, with real dates.
 
-        response = self.transport.get(
-            f"{base}/api/v1/series/{quote(series_id, safe='')}",
-            params=params,
-            cache_ttl=CACHE_TTL,
-        )
-        try:
-            payload = response.json()
-        except ValueError as err:
-            raise ParseError(self.id, f"non-JSON response for {series_id}: {err}") from err
+        Resolved through ``series.yaml`` rather than by parsing the id prefix:
+        the config already says which adapter serves each series, and inferring
+        it from ``FRED:`` would work right up until it did not.
+        """
+        # Imported here, not at module scope: the registry imports this module to
+        # register the adapter, so a top-level import would be a cycle.
+        from findynamics.data.store import resolve_specs
 
-        data = payload.get("data") if isinstance(payload, dict) else None
-        if not isinstance(data, dict):
-            raise ParseError(self.id, f"{series_id}: response is not a FinDyn envelope")
-
-        rows = data.get("observations")
-        if not isinstance(rows, list):
-            raise ParseError(self.id, f"{series_id}: response carries no observations array")
-
-        points: list[_Point] = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            observation_date = _date(row.get("obs_date"))
-            release_date = _date(row.get("release_date"))
-            value = _float(row.get("value"))
-            if observation_date is None or value is None:
-                continue
-            # A row with no release date cannot be composed: the maximum below
-            # would silently ignore it and the result would claim to be knowable
-            # earlier than it was.
-            if release_date is None:
-                raise ParseError(
-                    self.id,
-                    f"{series_id}: observation {observation_date} carries no release_date, "
-                    "so it cannot be composed into a point-in-time derived series",
-                )
-            points.append(
-                _Point(observation_date=observation_date, release_date=release_date, value=value)
+        specs = resolve_specs([series_id], self._config)
+        if not specs:
+            raise NotFoundError(
+                self.id,
+                f"{series_id} is an input to a derived series but is not in series.yaml, "
+                "so nothing knows how to fetch it",
             )
+        spec = specs[0]
 
+        provider = self._providers.get(spec.provider)
+        if provider is None:
+            provider = self._build(spec.provider)
+            self._providers[spec.provider] = provider
+
+        observations = provider.fetch_observations(spec.id, start=start, end=end)
+
+        points = [
+            _Point(
+                observation_date=o.observation_date,
+                release_date=o.release_date,
+                value=float(o.value),
+            )
+            for o in observations
+            if o.value == o.value  # drop NaN
+        ]
         # Sorted by observation date: that is the key the period-join walks.
         points.sort(key=lambda p: (p.observation_date, p.release_date))
         return points
@@ -374,13 +374,10 @@ def _float(value: object) -> float | None:
 
 
 def build_derived_provider(
-    transport: Transport,
+    transport: Transport | None = None,
     env: Mapping[str, str] | None = None,
 ) -> DerivedProvider:
-    import os
-
-    resolved = env if env is not None else os.environ
-    return DerivedProvider(transport, base_url=resolve_api_base(resolved))
+    return DerivedProvider(transport)
 
 
 __all__ = [

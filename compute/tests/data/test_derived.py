@@ -19,46 +19,56 @@ from datetime import date
 
 import pytest
 
-from findynamics.data.providers.base import NotFoundError, ParseError
+from findynamics.data.providers.base import NotFoundError, Observation
 from findynamics.data.providers.derived import RECIPES, DerivedProvider
 
 BASE = "https://findyn.test"
 
 
-class FakeResponse:
-    def __init__(self, payload: object) -> None:
-        self._payload = payload
+class FakeUpstream:
+    """Stands in for FRED/Shiller: canned observations, and a record of asks."""
 
-    def json(self) -> object:
-        if isinstance(self._payload, str):
-            raise ValueError("not JSON")
-        return self._payload
+    id = "fake"
+    requires_api_key = False
 
-
-class FakeTransport:
-    """Serves canned observations per series id, and records what was asked for."""
-
-    def __init__(self, series: dict[str, list[dict]]) -> None:
+    def __init__(self, series: dict[str, list[Observation]]) -> None:
         self.series = series
         self.requested: list[str] = []
 
-    def get(self, url: str, *, params=None, cache_ttl=None):  # noqa: ANN001
-        from urllib.parse import unquote
+    def available_series(self) -> list[str]:
+        return sorted(self.series)
 
-        series_id = unquote(url.rsplit("/", 1)[-1])
+    def fetch_metadata(self, series_id: str):  # noqa: ANN201
+        raise NotImplementedError
+
+    def fetch_observations(self, series_id, *, start=None, end=None):  # noqa: ANN001, ANN201
         self.requested.append(series_id)
-        rows = self.series.get(series_id)
-        if rows is None:
-            return FakeResponse({"data": {"observations": []}})
-        return FakeResponse({"data": {"observations": rows}})
+        return list(self.series.get(series_id, []))
 
 
-def obs(obs_date: str, release: str | None, value: float) -> dict:
-    return {"obs_date": obs_date, "release_date": release, "value": value}
+def obs(obs_date: str, release: str | None, value: float) -> Observation:
+    """One canned upstream observation. The series id is irrelevant to the
+    composition under test, so it is not a parameter."""
+    return Observation(
+        series_id="X",
+        provider="fake",
+        frequency="daily",
+        unit="percent",
+        observation_date=date.fromisoformat(obs_date),
+        release_date=date.fromisoformat(release) if release else date.fromisoformat(obs_date),
+        value=value,
+    )
 
 
-def provider(series: dict[str, list[dict]]) -> DerivedProvider:
-    return DerivedProvider(FakeTransport(series), base_url=BASE)
+def provider(series: dict[str, list[Observation]]) -> DerivedProvider:
+    """A DerivedProvider whose inputs come from one canned upstream.
+
+    The real one resolves each input's provider through series.yaml and builds
+    it from the registry; here one fake serves them all, which is the seam the
+    injectable builder exists to give.
+    """
+    upstream = FakeUpstream(series)
+    return DerivedProvider(build=lambda _provider_id: upstream)
 
 
 # ---------------------------------------------------------------------------
@@ -155,17 +165,25 @@ def test_periods_with_no_input_are_dropped_not_back_filled() -> None:
     assert [o.observation_date for o in observations] == [date(2026, 1, 31)]
 
 
-def test_an_observation_with_no_release_date_is_refused() -> None:
-    """It cannot be composed: the maximum would silently ignore it and the result
-    would claim to be knowable earlier than it was."""
-    p = provider(
-        {
-            "FRED:BAMLH0A0HYM2": [obs("2026-03-02", None, 7.8)],
-            "FRED:BAMLC0A0CM": [obs("2026-03-02", "2026-03-03", 1.2)],
-        }
-    )
-    with pytest.raises(ParseError, match="release_date"):
-        p.fetch_observations("DERIVED:HY_IG_DIFFERENTIAL")
+def test_every_input_carries_a_release_date_by_construction() -> None:
+    """The composition needs one per input, and the type already guarantees it.
+
+    An earlier version of this provider parsed inputs out of JSON and had to
+    check for a missing release date itself. Taking `Observation` instead moves
+    the guarantee into the type: it refuses to construct without one, and
+    refuses a release date that precedes its own observation date. One rule,
+    enforced where the data enters the system rather than at each consumer.
+    """
+    with pytest.raises(ValueError, match="license lookahead"):
+        Observation(
+            series_id="X",
+            provider="fake",
+            frequency="daily",
+            unit="percent",
+            observation_date=date(2026, 3, 2),
+            release_date=date(2026, 3, 1),
+            value=1.0,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -191,10 +209,43 @@ def test_an_unknown_derived_series_names_what_it_can_build() -> None:
         p.fetch_observations("DERIVED:NOT_A_THING")
 
 
-def test_without_a_serving_plane_it_says_so_rather_than_returning_nothing() -> None:
-    p = DerivedProvider(FakeTransport({}), base_url=None)
-    with pytest.raises(NotFoundError, match="FINDYN_API_URL"):
-        p.fetch_observations("DERIVED:HY_IG_DIFFERENTIAL")
+def test_an_input_missing_from_series_yaml_is_named(config) -> None:
+    """Inputs are resolved through config, not by parsing the id prefix.
+
+    A recipe naming something nobody configured has to say so — otherwise the
+    provider fetches nothing and the derived series is simply absent, which is
+    the failure mode this whole task existed to remove.
+    """
+    from findynamics.data.providers.derived import RECIPES, Recipe
+
+    bogus = Recipe(
+        series_id="DERIVED:BOGUS",
+        frequency="daily",
+        unit="percent",
+        title="t",
+        notes="n",
+        inputs=("FRED:NOT_CONFIGURED_ANYWHERE",),
+        combine=lambda values: values[0],
+    )
+    p = DerivedProvider(build=lambda _id: FakeUpstream({}), config=config)
+    with (
+        _TemporaryRecipe(RECIPES, "DERIVED:BOGUS", bogus),
+        pytest.raises(NotFoundError, match="FRED:NOT_CONFIGURED_ANYWHERE"),
+    ):
+        p.fetch_observations("DERIVED:BOGUS")
+
+
+class _TemporaryRecipe:
+    """Add one recipe for the duration of a test, then take it away."""
+
+    def __init__(self, table: dict, key: str, value: object) -> None:
+        self.table, self.key, self.value = table, key, value
+
+    def __enter__(self) -> None:
+        self.table[self.key] = self.value
+
+    def __exit__(self, *exc: object) -> None:
+        self.table.pop(self.key, None)
 
 
 def test_a_non_invertible_cape_is_skipped_rather_than_producing_an_infinity() -> None:
@@ -248,13 +299,17 @@ def test_every_recipe_names_inputs_that_series_yaml_ingests() -> None:
         assert not missing, f"{recipe.series_id} needs uningested {missing}"
 
 
-def test_a_malformed_envelope_is_a_parse_error_not_an_empty_series() -> None:
-    class BadTransport:
-        def get(self, url, *, params=None, cache_ttl=None):  # noqa: ANN001
-            return FakeResponse({"nope": True})
+def test_an_upstream_failure_propagates_rather_than_yielding_a_short_series() -> None:
+    """A derived series built from a provider that errored is not shorter — it is
+    wrong, and it would publish under a name promising otherwise."""
+    from findynamics.data.providers.base import ProviderError
 
-    p = DerivedProvider(BadTransport(), base_url=BASE)
-    with pytest.raises(ParseError, match="envelope"):
+    class BrokenUpstream(FakeUpstream):
+        def fetch_observations(self, series_id, *, start=None, end=None):  # noqa: ANN001, ANN201
+            raise ProviderError("fake", "upstream is down", retryable=True)
+
+    p = DerivedProvider(build=lambda _id: BrokenUpstream({}))
+    with pytest.raises(ProviderError, match="upstream is down"):
         p.fetch_observations("DERIVED:HY_IG_DIFFERENTIAL")
 
 
@@ -313,8 +368,13 @@ def test_derived_is_registered_and_keyless() -> None:
     assert built.requires_api_key is False
 
 
-def test_availability_tracks_whether_there_is_a_plane_to_read_from() -> None:
+def test_it_reports_available_because_its_inputs_carry_their_own_credentials() -> None:
+    """Unlike engine_output, `derived` needs no location and no key of its own.
+
+    Each input is fetched through its own provider, under that source's
+    credentials and quota. Reporting it unavailable when FINDYN_API_URL is unset
+    — which an earlier version did — described a dependency it does not have.
+    """
     from findynamics.data.providers import available_providers
 
-    assert available_providers({"FINDYN_API_URL": BASE})["derived"] is True
-    assert available_providers({})["derived"] is False
+    assert available_providers({})["derived"] is True

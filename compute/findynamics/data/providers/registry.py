@@ -65,9 +65,10 @@ QUOTAS: Mapping[str, Quota] = {
     "bls": Quota(5, 0.05, 1.0, 4, 120.0, 3, "BLS v2 allows 500 req/day with a key"),
     "bea": Quota(10, 0.5, 0.5, 4, 120.0, 3, "BEA allows 100 req/min, 100MB/day"),
     "engine_output": Quota(20, 5.0, 0.0, 3, 30.0, 2, "our own Worker; no published quota"),
-    # Same target as engine_output — our own Worker — but one derived series
-    # fans out into several input reads, so the burst allowance is larger.
-    "derived": Quota(30, 8.0, 0.0, 3, 30.0, 2, "our own Worker; several reads per series"),
+    # No network of its own: each input is fetched through its own provider's
+    # transport, under that source's quota. Present because every network
+    # provider must document one, and generous because it paces nothing.
+    "derived": Quota(100, 100.0, 0.0, 3, 30.0, 2, "no network; inputs use their own quotas"),
     # Undocumented and IP-throttled: a 429 is routine rather than exceptional,
     # so this is the most conservative pacing of any source here.
     "yahoo": Quota(2, 0.2, 2.0, 3, 300.0, 3, "unofficial; throttles hard by source IP"),
@@ -181,9 +182,9 @@ def build_provider(
 
     if provider_id in KEY_ENV:
         return factory(transport, api_key=environment.get(KEY_ENV[provider_id]))
-    # Published outputs and derived series are configured by location rather
-    # than by credential: both read the serving plane rather than a vendor.
-    if provider_id in {"engine_output", "derived"}:
+    # Published outputs are configured by location rather than by credential:
+    # they read the serving plane rather than a vendor.
+    if provider_id == "engine_output":
         return factory(transport, base_url=resolve_api_base(environment))
     return factory(transport)
 
@@ -193,9 +194,14 @@ def available_providers(env: Mapping[str, str] | None = None) -> dict[str, bool]
     environment = env if env is not None else os.environ
     status: dict[str, bool] = {}
     for provider_id in sorted(NETWORK_PROVIDERS):
-        if provider_id in {"engine_output", "derived"}:
+        if provider_id == "engine_output":
             # Keyless, but useless without somewhere to read from.
             status[provider_id] = resolve_api_base(environment) is not None
+        elif provider_id == "derived":
+            # Computed from other series, so it is available exactly when its
+            # inputs' providers are. Reported as available; a missing input
+            # raises with the series named rather than being hidden here.
+            status[provider_id] = True
         elif provider_id in KEYLESS_PROVIDERS:
             status[provider_id] = True
         else:
