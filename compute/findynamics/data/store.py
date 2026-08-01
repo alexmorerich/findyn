@@ -27,6 +27,7 @@ import pandas as pd
 from findynamics.core.config import SeriesConfig, SeriesSpec, get_series_config
 from findynamics.data.providers import build_provider
 from findynamics.data.providers.base import Observation, Provider, ProviderError
+from findynamics.data.providers.registry import UnknownProviderError
 from findynamics.data.vintages import repair_pre_archive_releases
 
 log = logging.getLogger("findynamics.data.store")
@@ -97,6 +98,14 @@ def load_observations(
     A provider failure costs its series, not the run (§14.2): the frame comes
     back short, the factor or engine that needed it degrades, and the failure is
     logged. That is the whole reason ``pit_join`` tolerates missing ids.
+
+    **A provider that cannot be built is the exception, and raises.** That is a
+    configuration error rather than a runtime fault: ``series.yaml`` names
+    something no code implements, so every run degrades in exactly the same way
+    and no amount of retrying or waiting will change it. Treating it like a
+    network blip is how ``DERIVED:EXCESS_CAPE_YIELD`` and
+    ``DERIVED:HY_IG_DIFFERENTIAL`` went unfetched for months while the valuation
+    and risk-appetite factors kept publishing scores that looked complete.
     """
     specs = resolve_specs(series_ids, config)
     if not specs:
@@ -111,6 +120,24 @@ def load_observations(
         if provider is None:
             try:
                 provider = build_provider(spec.provider, cache_dir=directory, env=env)
+            except UnknownProviderError as err:
+                # NOT the §14.2 case, and conflating the two cost this system two
+                # equity factor inputs for months. A provider that FAILS is a
+                # runtime fault — the API is down, the key expired — and losing
+                # its series is the right price. A provider that cannot be BUILT
+                # is a configuration error: series.yaml names something no code
+                # implements, every run degrades identically, and no amount of
+                # waiting fixes it. Continuing there means a factor publishes a
+                # score computed from fewer inputs than it claims, with nothing
+                # in the output saying so.
+                raise ProviderError(
+                    "store",
+                    f"{spec.id} is configured with provider {spec.provider!r}, which is not "
+                    f"implemented ({err}). This is a configuration error, not a transient "
+                    "failure: fix series.yaml or register the provider. Refusing to publish "
+                    "factors built from a silently reduced input set.",
+                    retryable=False,
+                ) from err
             except ProviderError as err:
                 log.error("cannot build provider %s: %s", spec.provider, err)
                 continue
