@@ -78,10 +78,16 @@ def archive_simulation(
     document: dict[str, Any],
     *,
     asset: str,
-    as_of: str,
     dry_run: bool = False,
 ) -> None:
     """PUT one Monte Carlo run's per-path outcomes to R2 (§11).
+
+    The date comes from the document, not from the caller. Those are two
+    different dates and they are routinely different: the job runs on 2026-08-01
+    and simulates the information set as of 2026-07-31, the last date the market
+    published. Passing the run date filed the archive under a day the simulation
+    was not about — the serving side rejected the mismatch, which is what that
+    check is for, and the fix is to stop having two sources for one fact.
 
     Never fatal. The archive is for offline analysis; a daily run that published
     its state and its quantiles has done its job, and losing tonight's path
@@ -91,6 +97,12 @@ def archive_simulation(
     numbers are missing and the run really has failed.
     """
     log = logging.getLogger("findynamics.simulations")
+
+    as_of = str(document.get("as_of") or "").strip()
+    if not as_of:
+        log.warning("simulation archive for %s has no as_of; skipping", asset)
+        return
+
     body = json.dumps(document, separators=(",", ":"), sort_keys=True)
 
     if dry_run:

@@ -327,7 +327,7 @@ def run(
     # payload of secondary value; sending it first would mean a run that timed
     # out on it published nothing at all.
     for asset, document in archives:
-        archive_simulation(document, asset=asset, as_of=as_of.isoformat(), dry_run=dry_run)
+        archive_simulation(document, asset=asset, dry_run=dry_run)
 
     # A partial run still publishes; the caller learns from the exit code that
     # something is missing without losing the engines that did work.
