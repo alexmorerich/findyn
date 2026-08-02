@@ -598,6 +598,50 @@ same wall. The gate was wrong; the answer was to fix the gate.
 
 ---
 
+## 20. RESOLVED — one extreme observation no longer condemns a series
+
+**Status:** fixed. The design principle is worth keeping even after the code is
+forgotten: **bad data should be blocked; extreme reality should be preserved.**
+
+After issue 19 fixed the jump *test*, three series were still refused — and all
+three were correct:
+
+| series | event | move |
+|---|---|---|
+| `FRED:ICSA` | 2020-03-21 | initial claims 282k → 3,010k |
+| `FRED:UNRATE` | 2020-04 | unemployment 4.4% → 14.7% |
+| `FRED:STLFSI4` | 2008-09-19 | financial stress, the week Lehman failed |
+
+The temptation was to widen the threshold again. That would have been the third
+round of loosening a check to make a specific set of inputs pass, which is
+tuning to the answer — the same failure recorded in issue 12.
+
+The real defect was the *granularity of the verdict*. `abnormal_jump` is a
+property of one observation; the gate treated it as a property of the series. A
+unit mismatch or a coverage hole genuinely condemns a series — there is no
+trustworthy subset left. One extreme print leaves the other 23 values perfectly
+usable, and in macro data it is usually not an error at all. **A
+financial-stress index that omits the financial crisis is not a
+financial-stress index.**
+
+So the verdict split in two:
+
+- **Series-level** (`errors`, blocks ingestion): unit or frequency disagreeing
+  with the metadata, malformed rows, coverage below threshold.
+- **Observation-level** (`anomalies`, never blocks): `abnormal_jump`. The row is
+  written with `quality_flag = 'abnormal_jump'` (migration 0008), served on the
+  API, and left for the consumer to exclude or down-weight.
+
+`DataQualityReport.status` still reports `warning` when anomalies exist, so a run
+carrying them is visibly not clean. Nothing is silently dropped and nothing is
+silently trusted — which is the same rule the RII follows for missing components
+and `p_shock` follows for an unfitted tail.
+
+Regression tests pin all three events by name, plus the negative: a unit
+mismatch still refuses the series, and a decimal error is still flagged.
+
+---
+
 ## Smaller things
 
 - **`derived_features` and `engine_output` overlap.** The kinematic path is

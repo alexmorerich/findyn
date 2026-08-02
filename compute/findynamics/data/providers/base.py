@@ -153,6 +153,12 @@ class Observation:
     release_date: date
     value: float
     revision_date: date | None = None
+    #: Set when the quality engine flagged THIS observation — currently only
+    #: ``abnormal_jump``. Carried rather than acted on: the value is stored and
+    #: served either way, and a consumer decides whether to exclude or
+    #: down-weight it. The alternative, dropping the row, would delete March 2020
+    #: and September 2008 from a system built to study them.
+    quality_flag: str | None = None
 
     def __post_init__(self) -> None:
         if self.release_date < self.observation_date:
@@ -175,6 +181,7 @@ class Observation:
             "revision_date": self.revision_date.isoformat() if self.revision_date else None,
             "value": float(self.value),
             "source": self.provider,
+            "quality_flag": self.quality_flag,
         }
 
 
