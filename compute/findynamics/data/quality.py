@@ -44,18 +44,42 @@ class DataQualityReport:
     warnings: list[Finding] = field(default_factory=list)
     errors: list[Finding] = field(default_factory=list)
     checked_range: str | None = None
+    #: Findings about individual observations rather than about the series.
+    #:
+    #: These do **not** block ingestion, and the distinction is the whole point.
+    #: A unit mismatch or a coverage hole says the series cannot be trusted as a
+    #: series — nothing built on it is safe. A single observation moving further
+    #: than any threshold expected says something happened. In macro and market
+    #: data, regime shifts and crises are not corruption; they are the signal
+    #: this system exists to capture, and refusing the series that contains them
+    #: throws away exactly the history the models need.
+    #:
+    #: So the observation is stored, flagged, and passed on with its flag. A
+    #: consumer that wants to exclude or down-weight it can; one that wants
+    #: March 2020 gets March 2020. What never happens is silent deletion.
+    anomalies: list[Finding] = field(default_factory=list)
 
     @property
     def status(self) -> Status:
         if self.errors:
             return "error"
-        if self.warnings:
+        if self.warnings or self.anomalies:
             return "warning"
         return "ok"
 
     @property
     def ok(self) -> bool:
+        """Whether the SERIES may be ingested. Anomalies do not affect this."""
         return not self.errors
+
+    def anomalous_dates(self) -> dict[str, str]:
+        """Observation date -> the code that flagged it, for the write-back."""
+        flagged: dict[str, str] = {}
+        for finding in self.anomalies:
+            observation_date = finding.context.get("observation_date")
+            if isinstance(observation_date, str):
+                flagged[observation_date] = finding.code
+        return flagged
 
     def to_wire(self) -> dict[str, Any]:
         return {
@@ -65,6 +89,7 @@ class DataQualityReport:
             "observations": self.observations,
             "warnings": [w.to_wire() for w in self.warnings],
             "errors": [e.to_wire() for e in self.errors],
+            "anomalies": [a.to_wire() for a in self.anomalies],
             "checked_range": self.checked_range,
         }
 
@@ -419,14 +444,14 @@ def _check_jumps(
             # Absolute change against the series' own scale. A genuine decimal
             # error still trips this; a rate moving from 2bp to 10bp does not.
             if scale > 0 and abs(delta) > scale * policy.error_absolute_jump_factor:
-                report.errors.append(
+                report.anomalies.append(
                     Finding(
                         "abnormal_jump",
                         f"{curr.observation_date} moves {delta:+.4g} from {prev.value:.4g}, "
                         f"beyond {policy.error_absolute_jump_factor:g}x the series' typical "
                         f"magnitude ({scale:.4g}). This series reaches zero, so it is judged "
                         "on absolute change rather than percentage.",
-                        "error",
+                        "warning",
                         {
                             "observation_date": curr.observation_date.isoformat(),
                             "absolute_change": delta,
@@ -445,12 +470,12 @@ def _check_jumps(
 
     for obs, rel in changes:
         if abs(rel) > policy.error_relative_jump:
-            report.errors.append(
+            report.anomalies.append(
                 Finding(
                     "abnormal_jump",
                     f"{obs.observation_date} moves {rel:+.1%} from the previous period, "
                     f"beyond the {policy.error_relative_jump:.0%} limit",
-                    "error",
+                    "warning",
                     {"observation_date": obs.observation_date.isoformat(), "relative_change": rel},
                 )
             )

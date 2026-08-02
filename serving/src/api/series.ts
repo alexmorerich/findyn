@@ -35,6 +35,15 @@ export interface Observation {
   release_date: string;
   revision_date: string | null;
   value: number;
+  /**
+   * Non-null when the quality engine flagged this observation (`abnormal_jump`).
+   *
+   * Served rather than filtered. The value is real — March 2020 unemployment,
+   * September 2008 financial stress — and a consumer that wants to exclude or
+   * down-weight it can see that it is unusual. Dropping it here would delete
+   * the events this system exists to measure, and silently.
+   */
+  quality_flag: string | null;
 }
 
 function daysSince(date: string | null, now: Date): number | null {
@@ -132,7 +141,7 @@ export async function getObservations(
   // Ascending: taking the newest N and reversing would drop the *oldest* rows
   // of a wide window, which is exactly the truncation this has to make visible.
   const { results } = await env.DB.prepare(
-    `SELECT obs_date, release_date, revision_date, value
+    `SELECT obs_date, release_date, revision_date, value, quality_flag
        FROM macro_series
       WHERE ${conditions.join(' AND ')}
       ORDER BY obs_date ASC, revision_date DESC

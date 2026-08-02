@@ -155,13 +155,22 @@ def test_a_long_gap_is_reported_as_missing_observations():
     assert gap.context["largest"][0]["days"] > 45
 
 
-def test_a_tripling_is_rejected():
-    """The spec's example: CPI cannot suddenly jump 300%."""
+def test_a_tripling_is_flagged_on_the_observation_that_did_it():
+    """The spec's example: CPI cannot suddenly jump 300%.
+
+    It is reported — but as an anomaly on that one observation, not as a verdict
+    on the series. The other 23 values are fine and a consumer may well want
+    them. `status` becomes "warning" so the run is visibly not clean, and the
+    flagged date travels with the row so nothing is trusted by accident.
+    """
     values = [300.0 + i * 0.2 for i in range(24)]
     values[12] = 1200.0
     report = check_series(metadata(), monthly(values))
-    assert report.status == "error"
-    assert "abnormal_jump" in codes(report.errors)
+
+    assert report.status == "warning"
+    assert report.ok, "one bad print does not condemn the series"
+    assert "abnormal_jump" in codes(report.anomalies)
+    assert report.anomalous_dates()
 
 
 def test_an_ordinary_market_drawdown_is_not_rejected():
@@ -243,6 +252,7 @@ def test_report_serialises_for_the_write_back_endpoint():
         "observations",
         "warnings",
         "errors",
+        "anomalies",
         "checked_range",
     }
     assert wire["status"] in {"ok", "warning", "error"}
@@ -286,8 +296,8 @@ def test_a_rate_moving_off_a_near_zero_floor_is_not_an_abnormal_jump():
     # belongs to the series, so it is decided once for the series.
     values = [1.5] * 40 + [0.07, 0.26, 0.12, 0.08, 0.51, 0.03, 0.15]
     report = check_series(
-        metadata(unit="percent", frequency="daily"),
-        monthly(values, unit="percent", frequency="daily"),
+        metadata(unit="percent", frequency="monthly"),
+        monthly(values, unit="percent", frequency="monthly"),
         policy=QualityPolicy(allow_non_positive=True),
     )
 
@@ -298,8 +308,8 @@ def test_a_spread_crossing_zero_is_not_an_abnormal_jump():
     """T10Y3M inverts. Crossing zero makes the denominator tiny, then negative."""
     values = [1.2] * 40 + [0.30, 0.05, -0.02, -0.40, 0.10]
     report = check_series(
-        metadata(unit="percent", frequency="daily"),
-        monthly(values, unit="percent", frequency="daily"),
+        metadata(unit="percent", frequency="monthly"),
+        monthly(values, unit="percent", frequency="monthly"),
         policy=QualityPolicy(allow_non_positive=True),
     )
 
@@ -315,24 +325,24 @@ def test_a_real_decimal_error_near_zero_is_still_caught():
     """
     values = [1.5] * 40 + [0.07, 150.0]  # a hundredfold slip, from near zero
     report = check_series(
-        metadata(unit="percent", frequency="daily"),
-        monthly(values, unit="percent", frequency="daily"),
+        metadata(unit="percent", frequency="monthly"),
+        monthly(values, unit="percent", frequency="monthly"),
         policy=QualityPolicy(allow_non_positive=True),
     )
 
-    assert "abnormal_jump" in codes(report.errors)
+    assert "abnormal_jump" in codes(report.anomalies)
 
 
 def test_a_decimal_error_on_a_large_series_is_still_caught_by_the_relative_test():
     """Series that never approach zero keep the original behaviour exactly."""
     values = [3000.0] * 40 + [30000.0]
     report = check_series(
-        metadata(unit="index", frequency="daily"),
-        monthly(values, unit="index", frequency="daily"),
+        metadata(unit="index", frequency="monthly"),
+        monthly(values, unit="index", frequency="monthly"),
         policy=QualityPolicy(),
     )
 
-    assert "abnormal_jump" in codes(report.errors)
+    assert "abnormal_jump" in codes(report.anomalies)
 
 
 def test_a_strictly_positive_series_keeps_the_relative_test():
@@ -345,12 +355,12 @@ def test_a_strictly_positive_series_keeps_the_relative_test():
     """
     values = [300.0] * 40 + [282.0, 3010.0]
     report = check_series(
-        metadata(unit="index", frequency="weekly"),
-        monthly(values, unit="index", frequency="weekly"),
+        metadata(unit="index", frequency="monthly"),
+        monthly(values, unit="index", frequency="monthly"),
         policy=QualityPolicy(),
     )
 
-    assert "abnormal_jump" in codes(report.errors)
+    assert "abnormal_jump" in codes(report.anomalies)
 
 
 def test_a_sign_changing_series_is_judged_on_absolute_change_throughout():
@@ -362,9 +372,104 @@ def test_a_sign_changing_series_is_judged_on_absolute_change_throughout():
     """
     values = [1.2, 0.9, 0.4, 0.05, -0.02, -0.40, -0.15, 0.10, 0.55, 1.1] * 5
     report = check_series(
-        metadata(unit="percent", frequency="daily"),
-        monthly(values, unit="percent", frequency="daily"),
+        metadata(unit="percent", frequency="monthly"),
+        monthly(values, unit="percent", frequency="monthly"),
         policy=QualityPolicy(allow_non_positive=True),
     )
 
     assert "abnormal_jump" not in codes(report.errors)
+
+
+# ---------------------------------------------------------------------------
+# extreme reality is preserved; bad data is still blocked
+# ---------------------------------------------------------------------------
+#
+# "Bad data should be blocked. Extreme reality should be preserved." The three
+# events below were each refused by a production backfill, and each is real.
+
+
+def test_the_2020_unemployment_spike_is_flagged_not_rejected():
+    """UNRATE 2020-04: 4.4% -> 14.7%. The largest one-month rise on record.
+
+    +236% trips the relative test, and it should: an unemployment rate more than
+    trebling in a month IS extraordinary. What must not happen is the series
+    being refused over it — that deletes the pandemic from a system built to
+    study exactly this kind of dislocation.
+    """
+    values = [3.5, 3.5, 4.4, 14.7, 13.2, 11.1, 10.2, 8.4] + [5.0] * 32
+    report = check_series(
+        metadata(unit="percent", frequency="monthly"),
+        monthly(values, unit="percent", frequency="monthly"),
+        policy=QualityPolicy(),
+    )
+
+    assert report.ok, "the series must remain ingestible"
+    assert "abnormal_jump" not in codes(report.errors)
+    assert "abnormal_jump" in codes(report.anomalies)
+    # And the flag names the date, so the row can carry it.
+    assert "2020-04-01" in report.anomalous_dates()
+
+
+def test_the_2020_initial_claims_spike_is_flagged_not_rejected():
+    """ICSA 2020-03-21: 282k -> 3,010k. A tenfold rise in one week."""
+    # Spaced monthly by the helper rather than weekly. The jump test reads
+    # consecutive values, not the calendar between them, and declaring a
+    # frequency the spacing contradicts would fail a different check entirely.
+    values = [220.0] * 40 + [282.0, 3010.0, 6867.0, 6615.0, 5237.0]
+    report = check_series(
+        metadata(unit="index", frequency="monthly"),
+        monthly(values, unit="index", frequency="monthly"),
+        policy=QualityPolicy(),
+    )
+
+    assert report.ok
+    assert "abnormal_jump" in codes(report.anomalies)
+
+
+def test_the_2008_financial_stress_spike_is_flagged_not_rejected():
+    """STLFSI4 around Lehman: an index centred on zero, and the week it broke.
+
+    Judged on absolute change because it crosses zero — and the September 2008
+    move is genuinely several times its own typical magnitude. Still a flag, not
+    a refusal: a financial-stress index that omits the financial crisis is not a
+    financial-stress index.
+    """
+    values = [-0.4, 0.1, -0.2, 0.3, -0.1] * 8 + [0.5, 2.0, 4.6, 3.1, 1.2]
+    report = check_series(
+        metadata(unit="index", frequency="monthly"),
+        monthly(values, unit="index", frequency="monthly"),
+        policy=QualityPolicy(allow_non_positive=True),
+    )
+
+    assert report.ok
+    assert "abnormal_jump" in codes(report.anomalies)
+
+
+def test_series_level_defects_still_block_ingestion():
+    """The distinction has to cut both ways or it is just a weaker gate.
+
+    A unit that disagrees with its metadata is a property of the SERIES: there
+    is no trustworthy subset to keep, because every value is in the wrong scale.
+    That still refuses.
+    """
+    report = check_series(
+        metadata(unit="percent", frequency="monthly"),
+        monthly([1.0, 2.0, 3.0], unit="usd", frequency="monthly"),
+        policy=QualityPolicy(),
+    )
+
+    assert not report.ok
+    assert report.status == "error"
+
+
+def test_an_anomaly_alone_leaves_the_series_warning_not_error():
+    """Status has to say something happened without saying the series is unusable."""
+    values = [1.0] * 40 + [1.0, 50.0]
+    report = check_series(
+        metadata(unit="index", frequency="monthly"),
+        monthly(values, unit="index", frequency="monthly"),
+        policy=QualityPolicy(),
+    )
+
+    assert report.status == "warning"
+    assert report.ok

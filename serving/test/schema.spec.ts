@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { applyWriteBack, validatePayload } from '../src/admin/writeback';
 
 const EXPECTED_TABLES = [
   'asset_state',
@@ -161,5 +162,96 @@ describe('D1 schema (FINDYN_V1_SPEC.md §7)', () => {
     ).all<{ jurisdiction: string }>();
 
     expect(results.map((r) => r.jurisdiction)).toEqual(['EU_UCITS', 'LATAM_DEFAULT', 'US']);
+  });
+});
+
+describe('observation-level quality flags (0008)', () => {
+  beforeEach(async () => {
+    await env.DB.prepare('DELETE FROM macro_series').run();
+  });
+
+  /**
+   * The distinction this column exists to draw: a defect that belongs to the
+   * SERIES blocks ingestion upstream, because it leaves no trustworthy subset.
+   * A single extreme observation leaves the rest of the series perfectly usable,
+   * and in macro data it is usually not an error at all — March 2020 and
+   * September 2008 are the history this system is for.
+   */
+  it('stores a flag on the row and serves it back', async () => {
+    await applyWriteBack(
+      env,
+      validatePayload({
+        observations: [
+          {
+            series_id: 'FRED:UNRATE',
+            obs_date: '2020-04-01',
+            release_date: '2020-05-08',
+            value: 14.7,
+            source: 'fred',
+            quality_flag: 'abnormal_jump',
+          },
+          {
+            series_id: 'FRED:UNRATE',
+            obs_date: '2020-03-01',
+            release_date: '2020-04-03',
+            value: 4.4,
+            source: 'fred',
+          },
+        ],
+      }),
+    );
+
+    const { results } = await env.DB.prepare(
+      `SELECT obs_date, value, quality_flag FROM macro_series
+        WHERE series_id = 'FRED:UNRATE' ORDER BY obs_date`,
+    ).all<{ obs_date: string; value: number; quality_flag: string | null }>();
+
+    // Both rows are present. The extreme one is marked, not missing.
+    expect(results).toEqual([
+      { obs_date: '2020-03-01', value: 4.4, quality_flag: null },
+      { obs_date: '2020-04-01', value: 14.7, quality_flag: 'abnormal_jump' },
+    ]);
+  });
+
+  it('rejects a flag outside the vocabulary', () => {
+    // Bounded so a consumer can branch on it. Free text would become a place to
+    // put messages nobody parses.
+    expect(() =>
+      validatePayload({
+        observations: [
+          {
+            series_id: 'FRED:UNRATE',
+            obs_date: '2020-04-01',
+            release_date: '2020-05-08',
+            value: 14.7,
+            source: 'fred',
+            quality_flag: 'looks_weird_to_me',
+          },
+        ],
+      }),
+    ).toThrow(/abnormal_jump/);
+  });
+
+  it('treats an absent flag as "nothing to say", not as a value', async () => {
+    await applyWriteBack(
+      env,
+      validatePayload({
+        observations: [
+          {
+            series_id: 'FRED:DGS10',
+            obs_date: '2026-01-02',
+            release_date: '2026-01-03',
+            value: 4.2,
+            source: 'fred',
+          },
+        ],
+      }),
+    );
+
+    const row = await env.DB.prepare(
+      `SELECT quality_flag FROM macro_series WHERE series_id = 'FRED:DGS10'`,
+    ).first<{ quality_flag: string | null }>();
+
+    expect(row?.quality_flag).toBeNull();
   });
 });

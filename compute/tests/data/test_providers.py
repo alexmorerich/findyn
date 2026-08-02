@@ -88,6 +88,10 @@ def test_observation_wire_shape_matches_the_admin_endpoint():
         "revision_date": "2025-03-01",
         "value": 1.0,
         "source": "test",
+        # Null when the quality engine had nothing to say, which is the ordinary
+        # case. Present on every row rather than only on flagged ones, so the
+        # absence of a flag is a stated fact rather than a missing key.
+        "quality_flag": None,
     }
 
 

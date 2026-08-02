@@ -11,6 +11,7 @@ FINDYN_V1_SPEC.md §6 (ingestion strategy), M1-A.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import sys
@@ -76,6 +77,18 @@ def ingest_series(
         else result.observations
     )
     report = check_series(result.metadata, observations, policy=policy)
+
+    # Anomalies are attached to the rows they describe rather than blocking the
+    # series. `check_series` decided which observations look extreme; this is
+    # where that judgement becomes something the store and its consumers can see.
+    flagged = report.anomalous_dates()
+    if flagged:
+        observations = [
+            dataclasses.replace(o, quality_flag=flagged[o.observation_date.isoformat()])
+            if o.observation_date.isoformat() in flagged
+            else o
+            for o in observations
+        ]
     return result.metadata.to_wire(), [o.to_wire() for o in observations], report
 
 

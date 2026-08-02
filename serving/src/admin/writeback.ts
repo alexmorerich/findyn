@@ -33,6 +33,17 @@ export interface ObservationRow {
   value: number;
   vintage?: string | null;
   source: string;
+  /**
+   * What the quality engine thought of THIS observation — currently only
+   * `abnormal_jump`. Stored and served, never acted on here.
+   *
+   * Series-level defects (unit mismatch, coverage holes) still block ingestion
+   * upstream, because they leave no trustworthy subset behind. A single extreme
+   * move leaves the rest of the series perfectly usable, and in macro data it is
+   * usually not an error at all: March 2020 and September 2008 are the history
+   * this system is for. So it is flagged and kept.
+   */
+  quality_flag?: string | null;
 }
 
 export interface PriceRow {
@@ -195,6 +206,19 @@ function requireString(value: unknown, field: string): string {
   return value;
 }
 
+/** Flags a consumer may branch on. Extend deliberately, not by accident. */
+export const QUALITY_FLAGS = ['abnormal_jump'] as const;
+
+function requireFlag(value: unknown, field: string): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || !(QUALITY_FLAGS as readonly string[]).includes(value)) {
+    throw new PayloadError(
+      `${field} must be one of ${QUALITY_FLAGS.join('|')}, got ${JSON.stringify(value)}`,
+    );
+  }
+  return value;
+}
+
 function requireDate(value: unknown, field: string): string {
   const s = requireString(value, field);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) {
@@ -297,6 +321,10 @@ export function validatePayload(raw: unknown): WriteBackPayload {
       value: requireNumber(o?.value, `observations[${i}].value`),
       vintage: o?.vintage ?? null,
       source: requireString(o?.source, `observations[${i}].source`),
+      // Bounded rather than free text: a flag is a vocabulary term a consumer
+      // can branch on, and an unbounded string would become a place to put
+      // messages nobody parses.
+      quality_flag: requireFlag(o?.quality_flag, `observations[${i}].quality_flag`),
     };
   });
 
@@ -459,11 +487,13 @@ export async function applyWriteBack(
   // instead of collapsing every revision of a period onto one row.
   const obsStmt = db.prepare(
     `INSERT INTO macro_series
-       (series_id, obs_date, release_date, revision_date, value, vintage, source, ingested_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       (series_id, obs_date, release_date, revision_date, value, vintage, source,
+        ingested_at, quality_flag)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(series_id, obs_date, revision_date) DO UPDATE SET
        release_date = excluded.release_date, value = excluded.value,
-       vintage = excluded.vintage, ingested_at = excluded.ingested_at`,
+       vintage = excluded.vintage, ingested_at = excluded.ingested_at,
+       quality_flag = excluded.quality_flag`,
   );
 
   const priceStmt = db.prepare(
@@ -581,6 +611,7 @@ export async function applyWriteBack(
           o.vintage ?? null,
           o.source,
           now,
+          o.quality_flag ?? null,
         ),
       ),
     );
