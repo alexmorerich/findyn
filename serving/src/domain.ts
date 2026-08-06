@@ -12,6 +12,39 @@ export const ASSETS = ['money', 'rates', 'equity', 'gold', 'crypto'] as const;
 export type Asset = (typeof ASSETS)[number];
 
 /**
+ * Engines whose class declares `experimental = True` (§3 rule 5).
+ *
+ * Mirrors `AssetEngine.experimental` on the compute side, where the same flag is
+ * what `core.registry.portfolio_engines` filters on. It lives here as data
+ * rather than as a check on the asset name because the API has to answer for an
+ * engine that has never run — `/assets` enumerates the vocabulary, not the
+ * table, so there is no row to read the flag off.
+ *
+ * Every response under `/assets/crypto/*` carries `experimental: true` beside
+ * the standard disclaimer. A consumer that reads only `data` and ignores the
+ * envelope is still told, because the engine also publishes an `experimental`
+ * signal on its state.
+ *
+ * compute/tests/test_domain.py asserts this set equals the Python one.
+ */
+export const EXPERIMENTAL_ASSETS = ['crypto'] as const;
+
+export function isExperimentalAsset(asset: string): boolean {
+  return (EXPERIMENTAL_ASSETS as readonly string[]).includes(asset);
+}
+
+/**
+ * §18, plus the sentence an experimental engine owes on top of it.
+ *
+ * Appended rather than replacing: the base disclaimer still applies, and a
+ * consumer diffing the two strings should see exactly what the extra claim is.
+ */
+export const EXPERIMENTAL_DISCLAIMER =
+  'This engine is EXPERIMENTAL and research-only. It publishes no expected return by ' +
+  'design, its confidence is capped at 0.5 by construction, and it is excluded from the ' +
+  'portfolio layer. Do not use its output as an input to an allocation.';
+
+/**
  * §2.2 — the shared risk factors. Named FORCES here (and `force_scores` in D1)
  * because renaming the table is not worth the churn; the compute plane calls
  * them factors.
@@ -32,6 +65,10 @@ export const FORCES = [
   'sentiment',
   'real_rate',
   'usd_strength',
+  // P5. The quantity of money, distinct from `liquidity` above: that one blends
+  // M2 and the Fed balance sheet with NFCI and RRP take-up and therefore reads
+  // as financial *conditions*. This is the stock on its own.
+  'global_liquidity',
 ] as const;
 export type Force = (typeof FORCES)[number];
 
@@ -67,6 +104,20 @@ export type MoneyRegime = (typeof MONEY_REGIMES)[number];
  */
 export const GOLD_REGIMES = ['hedge_bid', 'carry_headwind', 'crisis_bid'] as const;
 export type GoldRegime = (typeof GOLD_REGIMES)[number];
+
+/**
+ * Crypto-regime vocabulary, owned by findynamics/engines/crypto/domain.py.
+ *
+ * How much speculation is in the price — the only question that engine claims to
+ * answer. Ordered by increasing speculation, because `engine_output` publishes
+ * the state as its index here (`regime_code`) and a chart of it should read
+ * upwards as more of the price is momentum.
+ *
+ * `winter` is deliberately first and is a statement about DEPTH, not duration:
+ * March 2020 spent a fortnight there on a 50% crash and left again.
+ */
+export const CRYPTO_REGIMES = ['winter', 'normal', 'frenzy'] as const;
+export type CryptoRegime = (typeof CRYPTO_REGIMES)[number];
 
 /**
  * Standard discount horizons — the tenors `D(t, h)` is published for.

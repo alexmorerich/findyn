@@ -31,6 +31,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# FinCrypto (P5). Deliberately empty, and kept rather than deleted.
+#
+# The engine's rule is that anything it needs beyond numpy/pandas belongs here
+# and never in `dependencies` above — a research module quarantined by the import
+# graph should not be able to put a package into every deployment of the compute
+# plane. It currently needs nothing: the expanding OLS is five running sums, the
+# Gumbel threshold is three logarithms, and the supply schedule is arithmetic on
+# four dates, so scipy/statsmodels never come into it.
+#
+# The extra exists anyway so that the first dependency has an obvious home. An
+# empty list here is a decision; no list at all is an invitation to add a
+# `web3` to the core deps because there was nowhere else to put it.
+crypto = []
 dev = [
   "pytest>=8.3",
   "pytest-cov>=5.0",

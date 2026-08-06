@@ -39,6 +39,14 @@ FACTORS: Final[tuple[str, ...]] = (
     # engines share, promoted to Layer 0 rather than recomputed per engine.
     "real_rate",
     "usd_strength",
+    # P5. The *quantity* of money, which is not what `liquidity` measures.
+    # `liquidity` blends M2 and the Fed's balance sheet with NFCI and overnight
+    # RRP take-up, so it reads as financial conditions — tight or loose. This one
+    # is the stock of central-bank and broad money on its own, which is the
+    # variable FinCrypto regresses against, and mixing a conditions index into a
+    # regressor whose coefficient is published as a beta would make that beta
+    # uninterpretable.
+    "global_liquidity",
 )
 
 #: Standard discount horizons — the tenors ``D(t, h)`` is published for.

@@ -1,0 +1,141 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="FinCrypto (experimental)"
+  description="Research-only bitcoin engine: vol/drawdown regime, speculation index, expanding-window liquidity beta and the deterministic supply schedule. Publishes no expected return by design."
+  eyebrow="Asset engine — experimental"
+  heading="FinCrypto — network scarcity"
+  intro="A research module, quarantined from the rest of the system. It publishes no expected return at all, its confidence is capped at 0.5 by construction, and the portfolio layer excludes it. Everything on this page is read from the live API by your browser."
+>
+  <!-- Persistent, sticky, and first: 04-ui-plan.md §P5. A reader must not be
+       able to reach a number on this page without having passed the banner. -->
+  <aside class="expbanner" role="note" aria-label="Experimental engine">
+    <span class="expbanner__tag">Experimental</span>
+    <p class="expbanner__text">
+      Research output. This engine is excluded from the portfolio layer, publishes <strong
+        >no expected return</strong
+      >, and caps its own confidence at 0.5. Nothing here is an allocation input, a price target or
+      advice. Bitcoin has about fifteen years of history and four cycles; treat every number below
+      as a description of those four cycles.
+    </p>
+  </aside>
+
+  <section class="panel" aria-labelledby="state-h">
+    <div class="panel__head">
+      <h2 id="state-h">Current state</h2>
+      <span class="panel__note">/api/v1/assets/crypto/state</span>
+    </div>
+    <div id="crypto-state"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="regime-h">
+    <div class="panel__head">
+      <h2 id="regime-h">Regime</h2>
+      <span class="panel__note">/api/v1/assets/crypto/history?metric=regime_code</span>
+    </div>
+    <p class="prose">
+      Three states from the trailing price path alone: <code>winter</code> when the price is more
+      than 45% below its trailing-year peak, <code>frenzy</code> when it is more than double where it
+      was a year ago <em>and</em> realized volatility is elevated, <code>normal</code> otherwise.
+      Winter is checked first, because the two are not exclusive — November 2021 was up 60% year on
+      year and 45% off the peak at the same time, and calling that a frenzy would describe the top of
+      a market as its middle.
+    </p>
+    <p class="prose">
+      Deliberately the simplest model in the system. FinGold fits a Markov switching chain because
+      gold has six hundred months of returns and three regimes that are distinguishable in the
+      likelihood; bitcoin has about a hundred and eighty months and four cycles, and a switching
+      model on that sample would converge, produce an authoritative-looking posterior, and be
+      describing the four cycles it was given. Two thresholds you can state in a sentence are the
+      honest instrument here.
+    </p>
+    <div id="crypto-regime" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="speculation-h">
+    <div class="panel__head">
+      <h2 id="speculation-h">Speculation index</h2>
+      <span class="panel__note">/api/v1/assets/crypto/history?metric=speculation_index</span>
+    </div>
+    <p class="prose">
+      0&ndash;100: how much of the price is momentum. Three terms &mdash; realized volatility against
+      a reference, on-chain dollar volume against its trailing year, and how far the price sits above
+      the band the liquidity regression implies &mdash; combined as a <strong>geometric</strong> mean
+      so that all three must be present at once.
+    </p>
+    <p class="prose">
+      That is why the line sits at zero for long stretches, and it is the correct answer rather than
+      a gap in the data. Each term alone is unremarkable for this asset: volatility without volume is
+      an ordinary bad week, volume without volatility is settlement, and a price above the implied
+      band in a thin market is the money supply having moved. An index that read 35 through 2019
+      would be measuring the fact that bitcoin exists.
+    </p>
+    <div id="crypto-speculation" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="beta-h">
+    <div class="panel__head">
+      <h2 id="beta-h">Liquidity beta</h2>
+      <span class="panel__note">/api/v1/assets/crypto/history?metric=liquidity_beta</span>
+    </div>
+    <p class="prose">
+      Bitcoin's monthly log return regressed on the monthly log change in the money stock (US M2 plus
+      total Fed assets), on an <strong>expanding</strong> window &mdash; the estimate for any date
+      uses only months up to that date, so the line is what a run on that date would have published.
+      A beta of 8 would say a 1% month-on-month rise in the money stock has accompanied an 8% bitcoin
+      month.
+    </p>
+    <p class="prose">
+      <strong>Read the R&sup2; before you read the coefficient.</strong> On this data it is small
+      enough that the slope is mostly describing noise: monthly money-supply changes are tiny and
+      smooth, bitcoin's monthly returns are large and not, and a coefficient can be well-determined
+      in sign and still explain almost none of the variance. That is a finding rather than a bug, and
+      it is published rather than tuned away &mdash; which is also why this engine derives no
+      expected return from it.
+    </p>
+    <div id="crypto-beta" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="supply-h">
+    <div class="panel__head">
+      <h2 id="supply-h">Supply schedule</h2>
+      <span class="panel__note">AssetState.components</span>
+    </div>
+    <p class="prose">
+      The one part of this engine that is not an estimate. Issuance is fixed by consensus rules
+      &mdash; 50 BTC per block at genesis, halved every 210,000 blocks &mdash; so the four halvings
+      that have happened are facts with block heights and dates, and everything after them is
+      arithmetic on those facts. Supply inside a completed epoch is exact; inside the current one it
+      is interpolated in time, and the next halving date is a projection at the nominal ten-minute
+      block time, flagged as one.
+    </p>
+    <p class="prose">
+      <strong>Stock-to-flow is shown as a supply statistic and nothing else.</strong> It is issued
+      stock divided by annual issuance, it has a definition, and the model that made it famous
+      &mdash; regressing price on it in levels across a sample of two halvings &mdash; was falsified
+      in 2022 by roughly an order of magnitude. Nothing on this page reads it, no regime branches on
+      it, and it appears in no forecast.
+    </p>
+    <div id="crypto-supply" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="signals-h">
+    <div class="panel__head">
+      <h2 id="signals-h">Signals</h2>
+      <span class="panel__note">AssetState.signals</span>
+    </div>
+    <p class="prose">
+      Direction is a read on <em>risk</em>, not on where the price goes next &mdash; this engine has
+      no view on that. A high speculation index is <code>adverse</code> because a price that is
+      mostly momentum is a worse risk than one that is not, and both <code>winter</code> and
+      <code>frenzy</code> are adverse for opposite-looking reasons.
+    </p>
+    <div id="crypto-signals" style="margin-top:0.85rem"></div>
+  </section>
+</Base>
+
+<script>
+  import '../scripts/crypto';
+</script>

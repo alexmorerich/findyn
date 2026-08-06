@@ -20,6 +20,7 @@ from pathlib import Path
 from findynamics.core.registry import RegistryError, provider_factory, register_provider
 from findynamics.data.providers.base import Provider, ProviderError
 from findynamics.data.providers.bea import BeaProvider
+from findynamics.data.providers.blockchain import BlockchainProvider
 from findynamics.data.providers.bls import BlsProvider
 from findynamics.data.providers.derived import DerivedProvider
 from findynamics.data.providers.fred import FredProvider
@@ -65,6 +66,9 @@ QUOTAS: Mapping[str, Quota] = {
     "bls": Quota(5, 0.05, 1.0, 4, 120.0, 3, "BLS v2 allows 500 req/day with a key"),
     "bea": Quota(10, 0.5, 0.5, 4, 120.0, 3, "BEA allows 100 req/min, 100MB/day"),
     "engine_output": Quota(20, 5.0, 0.0, 3, 30.0, 2, "our own Worker; no published quota"),
+    # Four static daily charts, each cached for an hour and each covering the
+    # whole history in one request. Nothing here needs pace.
+    "blockchain": Quota(4, 0.2, 1.0, 3, 300.0, 3, "keyless public charts API, no published quota"),
     # No network of its own: each input is fetched through its own provider's
     # transport, under that source's quota. Present because every network
     # provider must document one, and generous because it paces nothing.
@@ -85,13 +89,43 @@ KEY_ENV = {
 
 #: Providers that reach the network and therefore need a transport.
 NETWORK_PROVIDERS = frozenset(
-    {"fred", "shiller", "stooq", "bls", "bea", "engine_output", "yahoo", "derived", "lbma"}
+    {
+        "fred",
+        "shiller",
+        "stooq",
+        "bls",
+        "bea",
+        "engine_output",
+        "yahoo",
+        "derived",
+        "lbma",
+        "blockchain",
+    }
 )
 
 #: Providers usable with no credential at all. ``engine_output`` needs no key but
 #: does need to be told where the serving plane is; when it is not, it reports no
 #: observations and the consuming engine degrades (see its module docstring).
-KEYLESS_PROVIDERS = frozenset({"shiller", "stooq", "engine_output", "yahoo", "derived", "lbma"})
+KEYLESS_PROVIDERS = frozenset(
+    {"shiller", "stooq", "engine_output", "yahoo", "derived", "lbma", "blockchain"}
+)
+
+# TODO(P5+): the paid on-chain vendors have no adapter and deliberately no
+# provider id.
+#
+# FinCrypto's model would use MVRV, SOPR, realized cap and coin-days-destroyed;
+# every one of them is a Glassnode / Coin Metrics product behind a paid key. The
+# ids and lags are declared in series.yaml under `engines.crypto.series` so the
+# config states what the model wants, but they are declared against the
+# `blockchain` provider's keyless catalogue only — there is no `glassnode` entry
+# in VALID_PROVIDERS, because config.py rejects a provider without a working
+# adapter on purpose: "a typo should not survive to the first fetch", and neither
+# should a metric nobody has paid for.
+#
+# Adding one is three things and no more: an adapter beside blockchain.py, an
+# entry in QUOTAS/NETWORK_PROVIDERS/KEY_ENV here, and the id moved into
+# VALID_PROVIDERS. The engine already treats every on-chain input as optional
+# (see engines/crypto/engine.py::_confidence), so nothing else has to change.
 
 #: The network adapters, published by name. ``mock`` is deliberately absent:
 #: reaching synthetic data must stay a deliberate act through ``build_provider``
@@ -106,6 +140,7 @@ for _name, _cls in (
     ("derived", DerivedProvider),
     ("yahoo", YahooProvider),
     ("lbma", LbmaProvider),
+    ("blockchain", BlockchainProvider),
 ):
     register_provider(_name, _cls)
 

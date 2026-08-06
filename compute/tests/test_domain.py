@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from findynamics.core.contracts.vocab import ASSETS, DISCOUNT_HORIZONS, HORIZONS, QUANTILES
+from findynamics.engines.crypto.domain import CRYPTO_REGIMES
 from findynamics.engines.equity.domain import REGIMES
 from findynamics.engines.gold.domain import GOLD_REGIMES
 from findynamics.engines.money.domain import MONEY_REGIMES
@@ -56,10 +57,60 @@ def ts_string_array(name: str) -> list[str]:
         # gold regime as its index (`regime_code`), so a reordering silently
         # relabels every row the gold engine has ever written.
         ("GOLD_REGIMES", GOLD_REGIMES),
+        # P5. Wire order again, and ordered by increasing speculation so a chart
+        # of `regime_code` reads upwards as more of the price is momentum.
+        ("CRYPTO_REGIMES", CRYPTO_REGIMES),
     ],
 )
 def test_vocabulary_matches_the_serving_plane(name, python_value):
     assert ts_string_array(name) == list(python_value)
+
+
+def test_the_experimental_flag_agrees_across_the_two_planes():
+    """§3 rule 5, and the one piece of vocabulary derived rather than declared.
+
+    On the Python side ``experimental`` is a class attribute the portfolio
+    filter reads; on the serving side it is a list, because the API has to
+    answer for an engine that has never run and so has no row to read a flag
+    off. Two representations of one fact, which is exactly the drift this
+    module exists to catch: a serving plane that forgot crypto was experimental
+    would serve research output with a production disclaimer.
+    """
+    from dataclasses import replace
+
+    from findynamics.core.config import load_series_config
+    from findynamics.core.registry import experimental_engines
+    from findynamics.engines import load_engines
+
+    # Load every engine regardless of its enable flag: the flag says whether an
+    # engine runs tonight, not whether it is experimental.
+    config = load_series_config()
+    load_engines(
+        replace(
+            config,
+            engines={name: replace(e, enabled=True) for name, e in config.engines.items()},
+        )
+    )
+
+    assert set(experimental_engines()) == set(ts_string_array("EXPERIMENTAL_ASSETS"))
+    assert set(experimental_engines()) == {"crypto"}
+
+
+def test_the_experimental_disclaimer_is_additional_not_alternative():
+    """Both claims are true at once, so serving appends rather than substitutes.
+
+    Asserted from Python because the compute plane is where the reason lives:
+    the §18 disclaimer is about the whole system and the experimental sentence
+    is about one engine, and a consumer diffing the two strings should see
+    exactly what the extra claim is.
+    """
+    source = DOMAIN_TS.read_text()
+    assert "EXPERIMENTAL_DISCLAIMER" in source
+    assert "`${DISCLAIMER} ${EXPERIMENTAL_DISCLAIMER}`" in (
+        (
+            Path(__file__).resolve().parents[2] / "serving" / "src" / "lib" / "responses.ts"
+        ).read_text()
+    )
 
 
 def test_money_vocabulary_stays_out_of_the_shared_layer():

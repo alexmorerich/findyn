@@ -43,6 +43,28 @@ def parse_date(value: str | None) -> date | None:
     return datetime.strptime(value, "%Y-%m-%d").date()
 
 
+def _parse_start(spec: SeriesSpec | None, series_id: str) -> date | None:
+    """The configured ``start`` for one series, or ``None``.
+
+    ``core.config`` already rejected an unparseable value at load, so anything
+    that reaches here is a valid date; the guard is for a spec built in a test
+    rather than loaded from yaml.
+    """
+    if spec is None or spec.start is None:
+        return None
+    try:
+        return date.fromisoformat(spec.start)
+    except ValueError:  # pragma: no cover - config load validates this
+        log.warning("%s: ignoring unparseable configured start %r", series_id, spec.start)
+        return None
+
+
+def _later(*days: date | None) -> date | None:
+    """The latest of the given dates, ignoring ``None``."""
+    known = [day for day in days if day is not None]
+    return max(known) if known else None
+
+
 def configured_series(provider_id: str) -> list[str]:
     """Every series in series.yaml served by ``provider_id``, factors and engines alike.
 
@@ -128,9 +150,25 @@ def run(
         )
         return 2
 
-    # One file holds one series. Left unchecked, a default that resolved to two
-    # would parse the same CSV under both ids and write one series' prices under
-    # the other's name — silent, and expensive to unpick from a PIT store.
+    # One file holds one series, and which one is not inferable. The id must be
+    # named rather than defaulted: a file downloaded by hand carries no
+    # identifier a program can read, so any default is a guess, and a wrong guess
+    # writes one instrument's prices under another's name — silent, and expensive
+    # to unpick from a PIT store.
+    #
+    # Defaulting was survivable while stooq had no configured series to fall back
+    # to and the check below caught the seven-symbol catalogue. P5 configured
+    # STOOQ:BTCUSD, which made `configured_series` resolve to exactly one id —
+    # so an ^SPX download with no --series would have passed the count check and
+    # been ingested as bitcoin.
+    if from_file is not None and not series_ids:
+        log.error(
+            "--from-file needs an explicit --series: a hand-downloaded file carries "
+            "no id, so the series it holds cannot be inferred (resolved by default "
+            "to %s, which is a guess)",
+            ", ".join(targets),
+        )
+        return 2
     if from_file is not None and len(targets) != 1:
         log.error(
             "--from-file ingests one series from one file, but %d resolved (%s); "
@@ -141,7 +179,8 @@ def run(
         return 2
 
     # The spec carries the publication lag, which is what a release date is
-    # synthesized from where the vintage archive cannot speak (data/vintages.py).
+    # synthesized from where the vintage archive cannot speak (data/vintages.py),
+    # and now an optional per-series `start`.
     specs = {spec.id: spec for spec in get_series_config().all_series()}
 
     metadata: list[dict[str, Any]] = []
@@ -152,9 +191,16 @@ def run(
     failed = 0
 
     for series_id in targets:
+        spec = specs.get(series_id)
+        # A configured `start` bounds what this series is asked for; an explicit
+        # --start bounds the whole run. The later of the two wins, so the CLI can
+        # narrow a backfill but cannot widen it into history the source does not
+        # have — asking Yahoo for bitcoin in 2009 returns nothing useful, and
+        # asking blockchain.info returns a run of zeros.
+        series_start = _later(start, _parse_start(spec, series_id))
         try:
             meta, rows, report = ingest_series(
-                provider, series_id, start=start, end=end, spec=specs.get(series_id)
+                provider, series_id, start=series_start, end=end, spec=spec
             )
         except ProviderError as err:
             failed += 1

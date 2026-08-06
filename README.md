@@ -262,7 +262,15 @@ disclaimer.
 
 Every §13 endpoint now answers. The convention stays for the engines still to come: an unbuilt
 endpoint returns `501` with its milestone rather than an empty payload, so a consumer can
-distinguish "not built" from "no data" — `/assets/gold/state` does exactly this today.
+distinguish "not built" from "no data" — `/assets/crypto/state` does exactly this today, because
+FinCrypto ships disabled.
+
+**Experimental engines are flagged on the wire.** Every response under `/assets/crypto/*` carries
+`"experimental": true` and appends a second sentence to the standard disclaimer, including the
+`501` an engine that has not run yet returns — a client polling for a first state has to know what
+it is waiting for before it arrives. `/assets` carries the flag per row rather than per envelope,
+since that array mixes research and production engines. `/meta` publishes
+`vocabulary.experimental_assets` so nothing has to hard-code the name.
 
 `/simulate` deliberately does not return paths. §11 archives the path bundles to R2 for offline
 analysis; ten thousand paths per horizon is not a public payload, and what a caller actually wants
@@ -315,8 +323,19 @@ for L3, posterior decomposition for L2). Crash risk is always published as its t
 The v1 milestones below describe the S&P500 engine, which is now
 `findynamics/engines/equity`. The multi-asset phases that surround it are in
 [`docs/redesign/`](docs/redesign/): **P0** (package restructure and core
-contracts) and **P1** (FinRates) are delivered; P2–P6 add the money, equity,
-gold, crypto and portfolio engines.
+contracts) through **P5** (FinCrypto) are delivered; **P6** adds the portfolio
+engine.
+
+**P5 (FinCrypto) is research-only and ships disabled.** It publishes no expected
+return at all — the field is `None` by design, because bitcoin has no cash flow,
+no issuer and four cycles of tradeable history, and a regime-conditional mean
+over four cycles is a description of four events rather than an estimate of a
+return. Its confidence is capped at 0.5 by construction. Three independent gates
+keep it out of anything that matters: `enabled: false` in
+`config/engines/crypto.yaml`, `experimental = True` on the engine class (which
+`core.registry.portfolio_engines` filters on), and an `import-linter` contract
+that forbids `portfolio`, `factors`, `core` and `data` from importing it at all.
+`findynamics/engines/crypto/engine.py` opens with the reasoning behind each.
 
 | M | Deliverable | Acceptance | Status |
 |---|---|---|---|

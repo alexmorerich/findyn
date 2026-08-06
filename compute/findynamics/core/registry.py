@@ -104,6 +104,42 @@ def enabled_engines(config: SeriesConfig, *, artifacts: object = None) -> list[A
     return engines
 
 
+def portfolio_engines(
+    config: SeriesConfig,
+    *,
+    include_experimental: bool = False,
+    artifacts: object = None,
+) -> list[AssetEngine]:
+    """The engines the portfolio layer is allowed to consume (§3 rule 5).
+
+    :func:`enabled_engines` filtered by ``experimental``. The daily job keeps
+    using ``enabled_engines`` — an experimental engine that is switched on still
+    computes, still writes back and still has a page — but nothing it publishes
+    reaches an allocation unless a caller passes ``include_experimental=True``
+    and means it.
+
+    This is a function rather than a comment on the portfolio package because a
+    rule that exists only in prose is a rule the next person deletes by
+    accident. It is also the smallest thing that can express the rule: P6 is not
+    built, and building the portfolio layer early to hold one filter would be
+    exactly the "framework beyond what the next engine needs" the architecture
+    doc forbids.
+    """
+    engines = enabled_engines(config, artifacts=artifacts)
+    if include_experimental:
+        return engines
+    return [engine for engine in engines if not engine.experimental]
+
+
+def experimental_engines() -> tuple[str, ...]:
+    """Registered engine names whose class declares ``experimental = True``.
+
+    Read by the cross-plane parity test, so ``serving/src/domain.ts`` cannot
+    disagree with the Python about which engines carry the flag.
+    """
+    return tuple(name for name, cls in ENGINES.items() if getattr(cls, "experimental", False))
+
+
 def iter_engines() -> Iterator[tuple[str, type[AssetEngine]]]:
     for name in registered_engines():
         yield name, ENGINES[name]

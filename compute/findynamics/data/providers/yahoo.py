@@ -55,6 +55,13 @@ _SYMBOLS: dict[str, tuple[str, str, str]] = {
     "YAHOO:^NDX": ("^NDX", "Nasdaq 100 Index (daily close)", "index"),
     "YAHOO:^DJI": ("^DJI", "Dow Jones Industrial Average (daily close)", "index"),
     "YAHOO:^VIX": ("^VIX", "CBOE Volatility Index (daily close)", "index"),
+    # P5, and a fallback for a fallback. FinCrypto's configured price role is
+    # STOOQ:BTCUSD; Stooq answers this egress with its proof-of-work
+    # interstitial, exactly as it does for ^SPX, so without this the crypto
+    # engine has no price at all outside a manual `--from-file` backfill.
+    # Yahoo quotes BTC-USD with gmtoffset 0 and a 24/7 calendar, so the density
+    # check below sees a median gap of 1 like any daily series.
+    "YAHOO:BTC-USD": ("BTC-USD", "Bitcoin / US Dollar (daily close)", "usd"),
 }
 
 

@@ -1,3 +1,177 @@
-# FinCrypto — experimental (Phase 5). Not built yet, and quarantined from the
-# portfolio engine unless explicitly configured in.
+# FinCrypto — network scarcity (Phase 5). EXPERIMENTAL, RESEARCH ONLY.
+#
+# This engine publishes no expected return. Not "a weak one", not "one with a
+# caveat" — the field is None, and engines/crypto/engine.py opens with several
+# paragraphs on why that is a modelling result rather than unfinished work.
+# `confidence` is capped at 0.5 by construction and no branch can raise it.
+#
+# It ships DISABLED and stays disabled after this phase. Three independent gates
+# keep it out of anything that matters — this flag, `experimental = True` on the
+# engine class (which core.registry.portfolio_engines filters on), and the
+# `Crypto is quarantined` import-linter contract — because any one of them can be
+# switched off by somebody who has not read the docstrings.
+#
+# Every threshold the model branches on lives in this file. A rule that only
+# exists in Python is a rule nobody can recalibrate without a deploy.
 enabled: false
+
+# --- The liquidity beta (engines/crypto/liquidity_beta.py) -----------------
+#
+# Monthly OLS of bitcoin's log return on the log change in the money stock,
+# expanding window, closed form. Monthly because the regressor is monthly: M2
+# has twelve observations a year, and a daily regression would be twenty-one
+# copies of each pretending to be independent.
+liquidity_beta:
+  # Months before a coefficient is published at all. Three years: below that the
+  # slope is a line through a handful of points and its standard error is wider
+  # than any reading anyone would take from it.
+  min_observations: 36
+  # Residual standard deviations in the half-width of the implied band. 2.0
+  # rather than 1.0 because the residuals are fat-tailed and a one-sigma band
+  # would put the price outside it about a third of the time.
+  band_sigma: 2.0
+  # USD-billions conversion per leg. FRED publishes M2SL in billions and WALCL in
+  # MILLIONS. Adding them unscaled makes the Fed's balance sheet outweigh all of
+  # M2 by a factor of a thousand — a mistake that changes the beta's sign nowhere
+  # and its meaning entirely, which is why these are config and not literals.
+  m2_scale: 1.0
+  central_bank_assets_scale: 0.001
+
+# --- Jump detection (findynamics/backtest/jumps.py) ------------------------
+#
+# The same Lee-Mykland detector FinGold uses, reached through the shared module
+# rather than by importing that engine. Only the calendar differs.
+jumps:
+  # Observations in the local bipower volatility window. A quarter of a 365-day
+  # year rather than gold's 63: the window is meant to be a season, and a season
+  # of a market that never closes is 90 sessions.
+  window: 90
+  # Gumbel test size. 1%, matching gold — this feeds a risk score, and a detector
+  # firing on one ordinary day in twenty would make the score a measure of how
+  # many days there are.
+  alpha: 0.01
+  # Trailing window the intensity is counted over, in observations: one year.
+  intensity_window: 365
+  min_observations: 180
+  # THE important line in this block. Bitcoin trades every day of the year, so
+  # the intensity annualizes on 365. Left at gold's 252 the reported jumps per
+  # year would be understated by 31%, silently, in the number `risk` below scales
+  # against `jump_intensity_reference`.
+  periods_per_year: 365
+
+# --- The regime (engines/crypto/regime.py) ---------------------------------
+#
+# Deliberately the simplest model in the system. Read regime.py's docstring
+# before touching anything here: a fitted switching model on four observed cycles
+# would converge, produce an authoritative-looking posterior, and be describing
+# the four cycles it was given.
+#
+# Order of evaluation is winter, then frenzy, then normal. Winter first because
+# the two are not exclusive: November 2021 was up 60% year on year AND 45% off
+# the peak, and calling that a frenzy would describe the top of a market as its
+# middle.
+regime:
+  # Observations in the trailing peak, return and volatility windows. One year.
+  window: 365
+  # Fraction below the trailing-year peak that counts as winter. 0.45 rather than
+  # 0.20: a 20% drawdown is a Tuesday for this asset and would put half the
+  # record in winter, which would make the label carry no information.
+  drawdown_threshold: 0.45
+  # Trailing 12-month LOG return above which the trend leg of frenzy fires.
+  # 0.69 is a double. Below it the leg fires in ordinary recovery years.
+  frenzy_return: 0.69
+  # Annualized realized volatility (percent) above which the vol leg fires. 60%
+  # is roughly bitcoin's own median — the leg asks "unusually volatile FOR
+  # BITCOIN", not "volatile", which it always is.
+  frenzy_vol: 60.0
+  # Observations required before any regime is published. Blanked rather than
+  # defaulted to `normal`, because "not enough history" and "nothing is
+  # happening" are different statements.
+  min_observations: 400
+
+# --- The speculation index (engines/crypto/speculation.py) -----------------
+#
+# vol x volume trend x distance above the liquidity-implied band, combined as a
+# GEOMETRIC mean so that all three must be present. The index therefore reads
+# zero for long stretches, which is the correct answer: an index that read 35
+# through 2019 would be measuring the fact that bitcoin exists.
+speculation:
+  # Annualized realized volatility (percent) mapping the vol term to 1.0. 120% is
+  # roughly the 2017 and 2021 peaks.
+  vol_reference_pct: 120.0
+  # Trailing baseline and recent windows for on-chain dollar volume, in days.
+  volume_baseline_days: 365
+  volume_recent_days: 90
+  # Excess of recent-over-baseline volume mapping the volume term to 1.0:
+  # 0.5 = on-chain dollar volume running 50% above its trailing year.
+  volume_span: 0.5
+  # Band half-widths above the implied level mapping the band term to 1.0.
+  band_span: 1.0
+
+# --- Risk score ------------------------------------------------------------
+risk:
+  # Annualized realized volatility mapping to 100. 150% rather than gold's 30%:
+  # an axis calibrated on gold would put bitcoin's QUIET years at 100 and say
+  # nothing about the difference between 2019 and 2021. The consequence is that
+  # this score is comparable across dates for bitcoin and is NOT comparable with
+  # another engine's risk score. Tolerable only because the portfolio layer never
+  # sees this engine.
+  vol_reference_pct: 150.0
+  # Detected jumps per year mapping the jump term to 1.0. Twice gold's reference,
+  # because the detector is scaled by each date's own trailing volatility and
+  # this market produces more locally-large days.
+  jump_intensity_reference: 12.0
+  vol_weight: 0.7
+  jump_weight: 0.3
+  # Used when history is too short to estimate volatility at all. Higher than
+  # gold's 0.5: an unknown crypto volatility is not a neutral prior.
+  vol_fallback: 0.6
+
+# --- Confidence ------------------------------------------------------------
+#
+# THE CEILING IS THE POINT. 0.5, against FinGold's 0.7, and FinGold is the other
+# engine modelling an asset with no cash flow. Three reasons, in engine.py's
+# _confidence docstring: a four-cycle sample, a market whose structure changed
+# discontinuously inside that sample, and a macro relationship that is a
+# co-movement rather than a mechanism.
+#
+# The penalties below subtract from it. Nothing adds, and the engine clamps to
+# `ceiling` rather than to 1.0, so a future edit that introduces a bonus term
+# still cannot publish 0.6.
+confidence:
+  ceiling: 0.5
+  no_liquidity_beta_penalty: 0.1
+  partial_liquidity_penalty: 0.05
+  missing_speculation_term_penalty: 0.05
+  no_jump_detector_penalty: 0.05
+  # The configured Stooq price was unreachable and Yahoo carried the series.
+  # Small: it is the same instrument. Non-zero: it is an unversioned endpoint.
+  fallback_price_penalty: 0.02
+  # Charged in PROPORTION to how much of the record is a volume-weighted daily
+  # AVERAGE rather than a close (engines/crypto/prices.py). Proportional rather
+  # than a flat fee because a record that is 5% average and one that is 100%
+  # average are different claims: at the full 0.05 the whole history would be
+  # average-based, and on the shipped snapshot the share is ~0.26, so the charge
+  # is ~0.013. See docs/design/crypto-price-record.md.
+  daily_average_price_penalty: 0.05
+  # The deep-history extension was configured but REFUSED by the splice guard.
+  # The state is still publishable — it just describes a shorter sample than the
+  # operator asked for, which is worth knowing about and is not the engine's
+  # fault. Small, because the surviving record is entirely closes and therefore
+  # cleaner; the cost is lost history, not corrupted history.
+  declined_splice_penalty: 0.03
+
+# --- Signal thresholds -----------------------------------------------------
+signals:
+  speculation_elevated: 60.0
+  speculation_subdued: 20.0
+  jump_intensity_elevated: 12.0
+
+outputs:
+  # The NIGHTLY window: how far back jobs.daily republishes the per-date series.
+  # Ten years — everything older is an unchanged upsert, so a longer nightly
+  # window writes the whole record every night to add one row.
+  history_days: 3650
+  # The BACKFILL window, used only by `jobs.daily --full-history`. Reaches past
+  # 2009-01-03, so one deliberate run puts the whole history in D1.
+  backfill_history_days: 40000
