@@ -33,6 +33,7 @@ from findynamics.engines.equity.features.kinematics import (
     JERK_ELEVATED_Z,
     JERK_EXTREME_Z,
     baseline_window,
+    burn_in_window,
     expanding_z,
     jerk_lamp,
     kinematics,
@@ -250,11 +251,72 @@ def test_the_z_baseline_is_expanding_never_centred():
 
 
 def test_the_baseline_degrades_when_ten_years_is_not_available():
-    """FRED:SP500 is capped at roughly ten years, so demanding a full decade
-    would produce a column of NaN and a lamp that never lights."""
+    """A path without a full decade must produce a noisier z-score, not a column
+    of NaN and a lamp that never lights."""
     full, short = baseline_window(4000, 252.0), baseline_window(2512, 252.0)
     assert full == (2520, False)
     assert short[0] < 2520 and short[1] is True
+
+
+# --- the filter's start-up --------------------------------------------------
+
+
+def test_the_burn_in_is_a_year_of_the_series_own_frequency():
+    """252 observations on a daily path, 12 on a monthly one — one span, not two."""
+    assert burn_in_window(24000, 252.0) == (252, False)
+    assert burn_in_window(1800, 12.0) == (12, False)
+
+
+def test_a_short_path_gives_up_less_and_says_so():
+    """Returning nothing is worse than returning something noisier and reporting it."""
+    periods, is_short = burn_in_window(300, 252.0)
+    assert periods == 150
+    assert is_short is True
+
+
+def test_the_diffuse_start_up_is_not_published_as_a_market_trend():
+    """The artifact this exists for, measured on the transform.
+
+    A local linear trend starts with a slope standard error of 1e3 and shrinks it
+    as observations arrive. The velocities on the way down are a statement about
+    that prior — on the real 1927 path the first was +142% annualized — and they
+    are discarded rather than drawn.
+    """
+    path = walk(1500)
+    features = compute_features(path, DAILY)
+    velocity = features.frame["velocity"]
+
+    assert velocity.iloc[:252].isna().all(), "the start-up must not be published"
+    assert velocity.iloc[252:].notna().all()
+    # price_filtered keeps its full span: the *level* is pinned by the first
+    # observation, and only the slope has to be estimated out of the prior.
+    assert features.frame["price_filtered"].notna().all()
+
+
+def test_the_start_up_transient_does_not_widen_the_jerk_baseline():
+    """Why the burn-in is not cosmetic.
+
+    ``jerk_z`` is scored against an **expanding** baseline, so a start-up value
+    is in the denominator for every later date and never washes out. Untrimmed,
+    the baseline over the real century is 3.2x too wide — which leaves Black
+    Monday 1987 rated at |z| = 2.95, just under the threshold where the lamp
+    would have lit.
+    """
+    path = walk(3000)
+    trimmed = compute_features(path, DAILY)
+    untrimmed = compute_features(path, DAILY, params=FeatureParams(kalman_burn_in_years=0.0))
+
+    settled = slice(252, None)
+    assert (
+        untrimmed.frame["jerk_z"].iloc[settled].abs().max()
+        < trimmed.frame["jerk_z"].iloc[settled].abs().max()
+    ), "the untrimmed baseline must be the wider one"
+
+
+def test_the_burn_in_is_reported_rather_than_silent():
+    features = compute_features(walk(1500), DAILY)
+    assert features.diagnostics["kalman_burn_in_periods"] == 252.0
+    assert features.diagnostics["kalman_burn_in_is_short"] == 0.0
 
 
 def test_the_lamp_thresholds_are_the_spec_ones():

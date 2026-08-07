@@ -141,7 +141,9 @@ import Base from '../layouts/Base.astro';
       The raw index close and the filtered level of the local-linear-trend model. The filter is
       what makes the derivatives below meaningful: differencing a raw index twice is mostly
       microstructure, because differencing amplifies noise roughly in proportion to the order.
-      Both series are in index points here; the model works in logs.
+      Both series are in index points here; the model works in logs. The filter runs over the
+      whole daily record back to 1927-12-30, so both lines are drawn wherever the market has
+      one &mdash; there is no range at which the model stops and the raw data carries on alone.
     </p>
     <div id="equity-price" style="margin-top:0.85rem"></div>
   </section>
@@ -156,6 +158,12 @@ import Base from '../layouts/Base.astro';
       believes in, not the last two closes. Acceleration is its rate of change, per year squared.
       A positive velocity with negative acceleration is a rally losing its slope, which is the
       distinction this panel exists to make visible.
+    </p>
+    <p class="prose">
+      Both are state estimates over the full daily record, so the 1929&ndash;32 collapse and the
+      1990s expansion are on the same axis as this quarter. The first year of each is not
+      published: a Kalman filter starts from a diffuse prior and the slopes it produces on the
+      way down describe that prior rather than the market.
     </p>
     <div id="equity-kinematics" style="margin-top:0.85rem"></div>
   </section>

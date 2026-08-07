@@ -108,11 +108,14 @@ export interface ObservationResult {
 /**
  * Raw observations for one series, oldest-first, optionally downsampled.
  *
- * `points` exists because the daily S&P record is 24,761 rows and the chart that
- * wants "everything since 1927" is reading it straight out of `macro_series` —
- * the engine's own chart metrics only reach as far as the *publication* series,
- * which FRED licence-caps at ten years. Decimating here is the same contract as
- * `/assets/:asset/history`: shape-preserving, and never silent about it.
+ * `points` exists because a series read straight out of `macro_series` can be
+ * 24,761 rows — the daily S&P record since 1927 — and no chart renders that. The
+ * equity page no longer needs this endpoint for its daily tiers, since the
+ * engine's own metrics now span the same record; what still reads raw
+ * observations is the 1871 Shiller tier, the data explorer, and anything asking
+ * about a series no engine publishes against. Decimating here is the same
+ * contract as `/assets/:asset/history`: shape-preserving, and never silent
+ * about it.
  */
 export async function getObservations(
   env: Env,

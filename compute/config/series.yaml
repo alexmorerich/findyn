@@ -206,10 +206,16 @@ engines:
     # Sources verified live 2026-07-31; every provider named here has a working
     # adapter (an unimplemented one now fails config load, not the first fetch).
     series:
-      # Daily backbone. FRED's SP500 is license-limited to a rolling ~10y window
-      # (2016-08 onward) and exists in FRED only, not ALFRED — the adapter
-      # detects that and fetches without a real-time window; release dates come
-      # from this lag via the vintage repair (data/vintages.py).
+      # Daily backbone, and the vendor of record for every date it covers. FRED's
+      # SP500 is license-limited to a rolling ~10y window (2016-08 onward) and
+      # exists in FRED only, not ALFRED — the adapter detects that and fetches
+      # without a real-time window; release dates come from this lag via the
+      # vintage repair (data/vintages.py).
+      #
+      # The cap no longer bounds the published record: `backfill` below is the
+      # same index and is spliced in front of this one for the dates it cannot
+      # reach (engines/equity/prices.py::publication_path). This series still
+      # owns every date from 2016-08 on.
       primary:      {id: "FRED:SP500", provider: fred, frequency: daily, publication_lag_days: 1}
       # Long daily proxy for regime/crisis calibration: NASDAQ100 runs from 1986
       # (verified: 11,994 obs), so 1987, 2000, 2008 and 2020 are all in-sample —
@@ -217,7 +223,10 @@ engines:
       regime_proxy: {id: "FRED:NASDAQ100", provider: fred, frequency: daily, publication_lag_days: 1}
       # Daily S&P history back to 1927 — the same index as `primary`, so a model
       # fitted here is not fitted on a proxy (engines/equity/prices.py treats
-      # this role as same-index for exactly that reason).
+      # this role as same-index for exactly that reason). That same-index claim
+      # is also what licenses splicing it in front of `primary` to give the
+      # published kinematics a century instead of a decade; the splice is
+      # verified against the ten years the two records share before it is made.
       #
       # Yahoo rather than Stooq: Stooq is the natural choice and was configured
       # here first, but it fronts its CSV with a JavaScript proof-of-work
