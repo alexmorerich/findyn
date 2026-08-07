@@ -120,6 +120,15 @@ SAME_INDEX_ROLES: frozenset[str] = frozenset({PUBLICATION_ROLE, "backfill"})
 #: describes the NASDAQ under a label that says S&P.
 EXTENSION_ROLE = "backfill"
 
+#: The source roles :func:`resolve` assigns, and the only ones it can report as
+#: missing. ``engines.equity.series`` also configures the drivers the instability
+#: view reads — ``credit_spread``, ``risk_free`` and the rest — which are not
+#: price records, never reach :func:`resolve`, and do not reach a fitted artifact
+#: either; a refit must not fail over one.
+PRICE_ROLES: tuple[str, ...] = tuple(
+    dict.fromkeys((PUBLICATION_ROLE, *CALIBRATION_PRECEDENCE, EXTENSION_ROLE, DEEP_HISTORY_ROLE))
+)
+
 #: Joins the two ids in a spliced series id. ``+`` rather than ``/`` or ``:``
 #: because it survives :func:`_slug` as a single separator and reads as "and
 #: then" in the ``model_version`` it ends up in.
@@ -206,6 +215,20 @@ class PriceRoles:
     #: *configured and present*; :func:`publication_path` decides whether the two
     #: records actually agree well enough to be joined.
     extension: PriceSeries | None = None
+    #: Source roles that ``series.yaml`` configures and this information set could
+    #: not supply — a provider that failed, or a series never ingested.
+    #:
+    #: A daily run degrades around these and publishes what it can; that is §14.2
+    #: and it is right. A **refit** must not, which is why this is recorded rather
+    #: than only logged: the artifact it writes is immutable and addressed by
+    #: content, so a month fitted without deep history is a different artifact
+    #: under the same key as the month fitted with it (issue #6).
+    #:
+    #: Excludes calibration roles that precedence legitimately left unused — a
+    #: `regime_proxy` that went unconsulted because `backfill` outranked it is not
+    #: missing, and failing a refit over it would be the false alarm this is
+    #: meant to prevent.
+    unresolved: tuple[str, ...] = ()
 
     @property
     def publication_input(self) -> PriceSeries:
@@ -401,11 +424,37 @@ def resolve(
         )
         extension = None
 
+    # Which configured roles this information set could not supply. `primary` is
+    # not among them: it raises above rather than resolving short. A calibration
+    # candidate is only counted when nothing ahead of it in the precedence
+    # answered either, so the ordinary case of `backfill` outranking
+    # `regime_proxy` reports nothing missing.
+    def present(source_role: str) -> bool:
+        # Deliberately not `usable`, which logs: this is a second pass over the
+        # same roles and re-running it would say everything twice.
+        spec = configured.get(source_role)
+        return spec is not None and int(counts.get(spec.id, 0)) >= min_observations
+
+    calibration_gap = calibration.source_role == PUBLICATION_ROLE
+    unresolved = tuple(
+        source_role
+        for source_role in PRICE_ROLES
+        if source_role in configured
+        and source_role != PUBLICATION_ROLE
+        and (
+            source_role not in CALIBRATION_PRECEDENCE
+            or source_role == EXTENSION_ROLE
+            or calibration_gap
+        )
+        and not present(source_role)
+    )
+
     roles = PriceRoles(
         publication=publication,
         calibration=calibration,
         deep_history=deep_history,
         extension=extension,
+        unresolved=unresolved,
     )
     log.info(
         "equity roles: publication=%s%s calibration=%s (%s%s) deep_history=%s",

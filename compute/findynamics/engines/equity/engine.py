@@ -717,8 +717,28 @@ class EquityEngine(AssetEngine):
         business sharing one, and sub-milestone B fits its regime model on the
         calibration path — which needs its own frozen parameters or the fit and
         the daily inference would be looking at differently-built features.
+
+        **Refuses an incomplete information set**, which is the one place this
+        engine does not degrade. A daily run that loses a provider publishes what
+        it can and says so (§14.2); a refit that loses one would write an
+        immutable artifact, addressed by content, that is a different model from
+        the one the same month produces with the provider up — and `deep_history`
+        does it silently, because it feeds the `tail` block but not
+        ``model_version``, so the degraded fit lands on the *same* key and 409s
+        against its predecessor (issue #6). A refit is monthly and rerunnable;
+        waiting for the provider costs nothing worth having.
         """
         analysis = self.analyze(world, roles=ALL_ROLES)
+
+        if analysis.roles.unresolved:
+            raise StateUnavailable(
+                "equity: refusing to refit on an incomplete information set — "
+                f"{', '.join(analysis.roles.unresolved)} "
+                f"{'is' if len(analysis.roles.unresolved) == 1 else 'are'} configured "
+                "but unavailable in this run. A fit is immutable once stored, so a "
+                "run that quietly fits on fewer series than the last one cannot be "
+                "told apart from it. Re-run when the provider answers"
+            )
 
         # The resolution says which roles were *available*; the publication
         # feature set says what the filter was actually handed, which is the same

@@ -23,6 +23,12 @@ dependencies = [
   # prefix matches `platform.machine()`). Linux CI has it already.
   "shap>=0.46",
   "scikit-learn>=1.5",
+  # A fitted artifact is addressed by content, so the fit has to be reproducible
+  # bit for bit; the HMM's k-means init is OpenMP-parallel and is not, at a fixed
+  # seed, unless its thread pool is pinned (issue #6, engines/equity/regime/hmm.py).
+  # Installed anyway as a scikit-learn dependency — named here because relying on
+  # it transitively for a correctness property is how it disappears in a bump.
+  "threadpoolctl>=3.1",
   "pyyaml>=6.0",
   "httpx>=0.27",
   # Shiller publishes ie_data.xls in the legacy .xls format, which openpyxl
