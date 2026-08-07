@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date
 from typing import Any, ClassVar
 
 import numpy as np
@@ -675,9 +675,15 @@ class EquityEngine(AssetEngine):
         """
         analysis = self.analyze(world, roles=ALL_ROLES)
 
+        # No wall-clock timestamp. `as_of` below is the information set this fit
+        # describes and is what the artifact is keyed on; a `fitted_at` recording
+        # when the container happened to run added nothing the key did not already
+        # say and made the document different on every run by construction, which
+        # is the one thing an immutable, content-compared store cannot tolerate
+        # (issue #6). When the run happened is the storage layer's business, and
+        # R2 already records it as object metadata.
         document: dict[str, Any] = {
             "model_version": analysis.model_version,
-            "fitted_at": datetime.now(UTC).isoformat(),
             "as_of": world.as_of.isoformat(),
             "roles": analysis.roles.describe(),
             "series": {
