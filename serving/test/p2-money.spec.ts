@@ -97,6 +97,29 @@ const PAYLOAD = {
   ],
 };
 
+/** ISO date ``n`` days before now, for assertions about *recency*. */
+function daysAgo(n: number): string {
+  return new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * ``PAYLOAD`` re-dated so its state and outputs land ``n`` days ago.
+ *
+ * The staleness endpoints measure against the wall clock, so a fixture with a
+ * literal date tests recency only until that date is five days old. Everything
+ * else in this file asserts on shape and value and is right to use the fixed
+ * dates; only the staleness block needs the clock, and it uses this.
+ */
+function recentPayload(n: number) {
+  const asOf = daysAgo(n);
+  return {
+    ...PAYLOAD,
+    as_of: asOf,
+    asset_state: PAYLOAD.asset_state.map((state) => ({ ...state, as_of: asOf })),
+    engine_output: PAYLOAD.engine_output.map((row) => ({ ...row, as_of: asOf })),
+  };
+}
+
 beforeEach(reset);
 
 describe('money vocabulary parity', () => {
@@ -252,12 +275,16 @@ describe('staleness is measured in market days, not ingestion hours', () => {
    * is stale, so under the old rule it would essentially never have appeared.
    */
   it('a state published yesterday is not stale', async () => {
-    await applyWriteBack(env, validatePayload(PAYLOAD));
+    // Dated relative to the run, not to a literal. The endpoint compares against
+    // `new Date()` inside the Worker, so a hard-coded as_of makes this assertion
+    // true only for the five days after it was written — and this test did in
+    // fact start failing on 2026-08-03 for that reason and nothing else. What it
+    // means is "yesterday", so it says yesterday.
+    await applyWriteBack(env, validatePayload(recentPayload(1)));
     const res = await SELF.fetch('https://findyn.test/api/v1/assets/money/state');
     const body = await res.json<{ stale: boolean; as_of: string }>();
 
-    // MONEY_STATE is dated 2026-07-28; well inside the 5-day window.
-    expect(body.as_of).toBe('2026-07-28');
+    expect(body.as_of).toBe(daysAgo(1));
     expect(body.stale).toBe(false);
   });
 
@@ -278,7 +305,7 @@ describe('staleness is measured in market days, not ingestion hours', () => {
   });
 
   it('history is judged the same way', async () => {
-    await applyWriteBack(env, validatePayload(PAYLOAD));
+    await applyWriteBack(env, validatePayload(recentPayload(1)));
     const res = await SELF.fetch(
       'https://findyn.test/api/v1/assets/money/history?metric=wealth_index',
     );

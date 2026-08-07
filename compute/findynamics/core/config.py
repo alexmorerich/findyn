@@ -16,6 +16,7 @@ Two files feed one :class:`SeriesConfig`:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,11 @@ VALID_PROVIDERS = frozenset(
         # delisted the LBMA gold series it used to carry, so there is no longer a
         # FRED route to the fix (data/providers/lbma.py).
         "lbma",
+        # Keyless Bitcoin network metrics (data/providers/blockchain.py). The
+        # paid on-chain vendors are deliberately absent — see the TODO in
+        # data/providers/registry.py for why an id with no adapter must not be
+        # listed here.
+        "blockchain",
         # Fallback only, and isolated behind one adapter so it stays deletable
         # (FINDYN_V1_SPEC.md §5.1 source 7).
         "yahoo",
@@ -74,6 +80,19 @@ class SeriesSpec:
     publication_lag_days: int
     #: +1 if a higher value is risk-supportive for its factor, -1 if it is a headwind.
     direction: int = 1
+    #: Earliest observation worth requesting, ``YYYY-MM-DD``, or ``None`` for
+    #: "everything the source holds".
+    #:
+    #: A **fetch** hint and nothing more: it bounds what backfill asks a provider
+    #: for, and no model reads it. That distinction is the whole reason it is
+    #: safe — a value that reached the scoring pipeline would silently shorten an
+    #: expanding window and move every historical percentile built on it.
+    #:
+    #: Its purpose is to stop a job asking for history that does not exist.
+    #: Bitcoin has no market price before 2010-08-18, so a backfill that requests
+    #: 2009 gets either an error or a run of zeros depending on the vendor's
+    #: mood, and neither is a price.
+    start: str | None = None
 
 
 @dataclass(frozen=True)
@@ -152,12 +171,24 @@ def _series_from_mapping(raw: Any, where: str) -> SeriesSpec:
     if direction not in (1, -1):
         raise ConfigError(f"{where}: direction must be 1 or -1, got {direction!r}")
 
+    start = raw.get("start")
+    if start is not None:
+        # Validated at load rather than at fetch, like everything else here: a
+        # typo'd date should fail the config, not the job that used it.
+        if not isinstance(start, str):
+            raise ConfigError(f"{where}: start must be a YYYY-MM-DD string, got {start!r}")
+        try:
+            date.fromisoformat(start)
+        except ValueError as err:
+            raise ConfigError(f"{where}: start {start!r} is not a valid date: {err}") from None
+
     return SeriesSpec(
         id=str(series_id),
         provider=provider,
         frequency=frequency,
         publication_lag_days=lag,
         direction=direction,
+        start=start,
     )
 
 

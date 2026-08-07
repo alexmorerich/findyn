@@ -1,5 +1,5 @@
 import type { Env } from '../types';
-import { ASSETS } from '../domain';
+import { ASSETS, isExperimentalAsset } from '../domain';
 import { MIN_THRESHOLD, decimate } from '../lib/decimate';
 
 /**
@@ -42,6 +42,16 @@ export interface AssetSummary {
   confidence: number | null;
   stale: boolean;
   freshness_days: number | null;
+  /**
+   * Research-only engine, excluded from the portfolio layer (§3 rule 5).
+   *
+   * On the row rather than only on the envelope because this list mixes
+   * experimental and production engines in one array — an envelope-level flag
+   * would have to describe all five at once, and would therefore describe none
+   * of them. The home page's Engines panel reads this to tag and de-emphasize
+   * the card.
+   */
+  experimental: boolean;
 }
 
 export interface HistoryPoint {
@@ -174,6 +184,7 @@ export async function listAssets(env: Env, now = new Date()): Promise<AssetSumma
       confidence: row?.confidence ?? null,
       stale: freshness === null || freshness > ASSET_STALE_DAYS,
       freshness_days: freshness,
+      experimental: isExperimentalAsset(asset),
     };
   });
 }
@@ -213,6 +224,22 @@ export async function listMetrics(env: Env, asset: string): Promise<string[]> {
  * prefix that looks like a short history.
  */
 export const MAX_HISTORY_ROWS = 60000;
+
+/**
+ * The same ceiling for an endpoint that reads several rows per date and pivots.
+ *
+ * `/regime` stores five rows per date and `/instability` five metrics, so a raw
+ * 60,000-row cap is a 12,000-*date* cap — half a century short of the record the
+ * engine now publishes. Both would have come back reporting that the S&P ended
+ * in the 1970s, which is the failure `truncated` exists to make visible rather
+ * than one it should be left to report.
+ *
+ * Expressed as a multiplier rather than a second constant so the two cannot
+ * drift: the ceiling is one number, in dates, wherever it is applied.
+ */
+export function maxHistoryRowsPerDate(rowsPerDate: number): number {
+  return MAX_HISTORY_ROWS * Math.max(Math.trunc(rowsPerDate), 1);
+}
 
 /** Default target point count when a caller asks for decimation. */
 export const DEFAULT_CHART_POINTS = 2000;

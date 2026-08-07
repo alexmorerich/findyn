@@ -51,6 +51,12 @@ _SYMBOLS: dict[str, tuple[str, str, str]] = {
     "voo.us": ("STOOQ:VOO.US", "Vanguard S&P 500 ETF (daily close)", "usd"),
     "tlt.us": ("STOOQ:TLT.US", "iShares 20+ Year Treasury Bond ETF (daily close)", "usd"),
     "gld.us": ("STOOQ:GLD.US", "SPDR Gold Shares (daily close)", "usd"),
+    # P5. A currency pair rather than an instrument, so the export carries no
+    # Volume column — which costs nothing, since the parser reads Date and Close
+    # and nothing else. Bitcoin has no exchange calendar: the series has an
+    # observation every calendar day including weekends, and everything
+    # downstream annualizes on 365 rather than 252 because of it.
+    "btcusd": ("STOOQ:BTCUSD", "Bitcoin / US Dollar (daily close)", "usd"),
 }
 
 _BY_SERIES_ID = {series_id: symbol for symbol, (series_id, _, _) in _SYMBOLS.items()}

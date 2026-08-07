@@ -107,7 +107,7 @@ class GoldRules:
         return cls(
             drivers=drivers_mod.DriverRules.from_params(params),
             regime=regime_mod.RegimeRules.from_params(params),
-            jumps=jumps_mod.JumpRules.from_params(params),
+            jumps=jumps_mod.JumpRules.from_params(params, where="engines/gold.yaml"),
             hedge=hedge_mod.HedgeRules.from_params(params),
         )
 

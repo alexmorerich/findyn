@@ -12,7 +12,7 @@ from datetime import date
 import pytest
 
 from findynamics.core.contracts.state import AssetState, EngineOutput, FactorState, Signal
-from jobs._common import chunk_on
+from jobs._common import chunk_on, refit_cutoff
 from jobs.backfill import DEFAULT_BATCH_SIZE, chunk_payload, configured_series
 from jobs.backfill import run as backfill_run
 from jobs.daily import asset_state_payload, engine_output_payload, factor_payload, parse_as_of
@@ -60,12 +60,15 @@ class TestBackfillFromFile:
         path.write_text(self.CSV)
         assert self._run(tmp_path, path, series=["STOOQ:^SPX"]) == 0
 
-    def test_naming_no_series_is_refused_now_that_none_is_configured(self, tmp_path):
-        """series.yaml points `backfill` at Yahoo, so stooq maps to no series.
+    def test_naming_no_series_is_refused(self, tmp_path):
+        """A hand-downloaded file carries no id, so it must be told which one.
 
-        The default then falls through to the adapter's whole catalogue, which
-        is seven symbols and cannot describe one file. Being refused is right;
-        picking the first would silently mislabel the data.
+        This used to pass for an incidental reason — stooq had no configured
+        series, so the default fell through to the adapter's seven-symbol
+        catalogue and was refused for resolving to more than one. P5 configured
+        STOOQ:BTCUSD, which made the default resolve to exactly *one* id, and an
+        ^SPX download would then have been ingested as bitcoin. The refusal is
+        now on the real reason: the id is not inferable and must be named.
         """
         path = tmp_path / "^spx_d.csv"
         path.write_text(self.CSV)
@@ -212,6 +215,53 @@ class TestParseAsOf:
     def test_rejects_a_malformed_date_rather_than_guessing(self):
         with pytest.raises(ValueError):
             parse_as_of("28/07/2026")
+
+
+class TestRefitCutoff:
+    """The fix for issue #6: a refit's cutoff comes from the calendar, not the clock.
+
+    The property that matters is not any single date — it is that every run inside
+    a month resolves to the *same* cutoff, because that is what makes two refits
+    produce byte-identical artifacts and land on `putArtifact`'s idempotent path
+    instead of its 409.
+    """
+
+    def test_every_day_of_a_month_resolves_to_the_same_cutoff(self):
+        """The invariant the whole change exists for."""
+        cutoffs = {refit_cutoff(date(2026, 8, day)) for day in range(1, 32)}
+        assert cutoffs == {date(2026, 7, 31)}
+
+    def test_the_reported_incident_no_longer_diverges(self):
+        """01:13 and 04:00 on 2026-08-01 — the two runs that conflicted."""
+        dispatch = refit_cutoff(date(2026, 8, 1))
+        scheduled = refit_cutoff(date(2026, 8, 1))
+        assert dispatch == scheduled == date(2026, 7, 31)
+
+    def test_consecutive_months_get_distinct_cutoffs(self):
+        """Idempotent within a month, but a new month must be a new fit."""
+        assert refit_cutoff(date(2026, 8, 15)) == date(2026, 7, 31)
+        assert refit_cutoff(date(2026, 9, 1)) == date(2026, 8, 31)
+
+    def test_january_crosses_the_year(self):
+        assert refit_cutoff(date(2026, 1, 1)) == date(2025, 12, 31)
+
+    def test_march_lands_on_a_leap_day(self):
+        assert refit_cutoff(date(2024, 3, 10)) == date(2024, 2, 29)
+        assert refit_cutoff(date(2026, 3, 10)) == date(2026, 2, 28)
+
+    def test_the_cutoff_never_reaches_the_run_month(self):
+        """Never fit on a partial month: that is what made the cutoff move."""
+        for month in range(1, 13):
+            for day in (1, 15, 28):
+                run_date = date(2026, month, day)
+                assert refit_cutoff(run_date) < run_date.replace(day=1)
+
+    def test_the_cutoff_is_a_month_end(self):
+        from datetime import timedelta
+
+        for month in range(1, 13):
+            cutoff = refit_cutoff(date(2026, month, 17))
+            assert (cutoff + timedelta(days=1)).day == 1
 
 
 class TestPayloadShaping:

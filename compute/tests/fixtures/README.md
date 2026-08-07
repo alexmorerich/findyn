@@ -127,3 +127,64 @@ windows passed.
   strips them for its cross-cutoff comparisons and explains why.
 
 Regenerate the same way as above.
+
+## `crypto_daily.csv`
+
+Bitcoin's price and network metrics plus the two money-stock series, so the
+regime assertions run against 2017, 2018, 2021 and 2022 as they happened rather
+than against a series invented until the thresholds passed.
+
+* **Source**: `YAHOO:BTC-USD`, blockchain.info's `market-price`,
+  `estimated-transaction-volume-usd`, `n-unique-addresses`, `n-transactions` and
+  `hash-rate`, plus FRED `M2SL` and `WALCL`.
+* **Shape**: one row per observation, 2010-08-18 to 2026-08-05, 34,538 rows.
+  Daily is unavoidable: the jump detector's unit of observation is a session and
+  the drawdown windows are counted in them.
+* **It starts 2010-08-18 because that is the first date bitcoin had a market
+  price at all.** Not a chosen window: `market-price` is padded with 0.0 back to
+  the genesis block, and the adapter drops those because "no market yet" is not a
+  price of zero.
+* **Two price legs, and they are different statistics.** `YAHOO:BTC-USD` is a
+  daily close from 2014-09-17; `BLOCKCHAIN:MARKET_PRICE` is a volume-weighted
+  daily *average* across exchanges from 2010-08-18. `engines/crypto/prices.py`
+  splices the second in front of the first only after checking the three things
+  that decide whether that is honest — measured on this snapshot: no step at the
+  seam (−2.9%, against a 1.4% median daily move), no level bias (−0.18% mean
+  signed gap over 4,340 shared dates), comparable volatility (ratio 1.016). They
+  disagree hard on single high-range days (2020-03-12: a $4,971 close against a
+  $7,937 average), which is the definition rather than an error, so every date the
+  average supplied is flagged and the flag is published as `price_is_daily_average`.
+* **Both legs are kept in the fixture rather than pre-stitched**, so the splice
+  logic and its refusal branches are what the tests exercise. A pre-joined column
+  would test that a file can be read.
+* **The configured `STOOQ:BTCUSD` is absent.** Stooq is the role `series.yaml`
+  declares and it is the right declaration; the endpoint fronts its CSV with the
+  same JavaScript proof-of-work challenge that blocks `^SPX` (re-verified for
+  this symbol 2026-08-05), so no automated egress this project has can reach it.
+  The fallback path is therefore the path the tests exercise, which is also the
+  path production takes — and
+  `test_engine.py::test_the_fallback_price_source_is_reported_rather_than_hidden`
+  asserts the engine says so rather than implying Stooq answered.
+* **No supply data is fetched.** Issuance is generated from consensus constants
+  in `engines/crypto/scarcity.py` — genesis 2009-01-03, 50 BTC, halvings every
+  210,000 blocks — so there is nothing about supply in this file and nothing to
+  regenerate.
+* **Every day of the year is present, weekends included.** Bitcoin has no
+  exchange calendar. That is why every annualization in this engine uses 365 and
+  why `jumps.periods_per_year` is a configured rule rather than a constant.
+* **`M2SL` and `WALCL` came from FRED's keyless CSV endpoint**
+  (`fredgraph.csv?id=…`) rather than through the provider path, because no ALFRED
+  key was available where this was generated. The *values* are the published
+  ones either way; what is lost is the vintage archive, so release dates here are
+  synthesized from the configured lag (14 days from month end for M2SL, 7 from
+  period end for WALCL) exactly as `data/vintages.py` would do for a keyless
+  fetch. The replay test's `SETTLEMENT_DAYS` carve-out exists because of this
+  lag, and it explains itself at the point of use.
+* **No paid on-chain metrics.** MVRV, SOPR and realized cap are the series this
+  model would most like to have and every one is behind a vendor key; they are
+  deliberately absent from the config as well as from here, and the TODO naming
+  what adding one costs is in `data/providers/registry.py`.
+
+Regenerate the same way as above. If a regeneration changes the labels the
+acceptance windows assert on, that is a finding about the model or the source —
+not a reason to move the fixture or the thresholds.

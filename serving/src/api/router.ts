@@ -17,6 +17,7 @@ import {
   listAssets,
   listMetrics,
 } from './assets';
+import { isExperimentalAsset } from '../domain';
 import {
   UnknownForceError,
   getForces,
@@ -27,8 +28,11 @@ import {
 } from './equity';
 import {
   ASSETS,
+  CRYPTO_REGIMES,
   DISCOUNT_HORIZONS,
+  EXPERIMENTAL_ASSETS,
   FORCES,
+  GOLD_REGIMES,
   HORIZONS,
   MONEY_REGIMES,
   RATE_REGIMES,
@@ -74,7 +78,12 @@ api.get('/meta', (c) =>
         assets: ASSETS,
         rate_regimes: RATE_REGIMES,
         money_regimes: MONEY_REGIMES,
+        gold_regimes: GOLD_REGIMES,
+        crypto_regimes: CRYPTO_REGIMES,
         discount_horizons: DISCOUNT_HORIZONS,
+        // Which of `assets` are research-only. Published so a client can find
+        // out without hard-coding the name of the one engine that is.
+        experimental_assets: EXPERIMENTAL_ASSETS,
       },
     }),
   ),
@@ -177,12 +186,18 @@ api.get('/assets/:asset/state', async (c) => {
     // Registered but silent. 501 with the phase tag is the existing convention
     // for "reserved, not delivered", and it is the honest answer here too: the
     // consumer can tell this apart from an engine that ran and found nothing.
+    //
+    // The experimental flag rides on the 501 as well. A consumer polling for a
+    // crypto state has to know what it is waiting for before it arrives, not
+    // after — otherwise the first response it can act on is the first one that
+    // tells it not to.
     return c.json(
       {
         error: 'not_implemented',
         message: `The ${asset} engine has not published a state yet.`,
         milestone: ENGINE_PHASE[asset] ?? 'P6',
         asset,
+        ...(isExperimentalAsset(asset) ? { experimental: true } : {}),
       },
       501,
     );
@@ -194,6 +209,7 @@ api.get('/assets/:asset/state', async (c) => {
       model_version: state.model_version,
       // Engine dates are market dates, not ingestion timestamps — see isAssetStale.
       stale: isAssetStale(state.as_of),
+      experimental: isExperimentalAsset(asset),
     }),
   );
 });
@@ -246,7 +262,11 @@ api.get('/assets/:asset/history', async (c) => {
         decimated: history.decimated,
         points: history.points,
       },
-      { as_of: newest, stale: isAssetStale(newest) },
+      {
+        as_of: newest,
+        stale: isAssetStale(newest),
+        experimental: isExperimentalAsset(asset),
+      },
     ),
   );
 });

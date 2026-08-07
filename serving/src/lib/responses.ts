@@ -1,5 +1,5 @@
 import type { Context } from 'hono';
-import { DISCLAIMER, STALENESS_THRESHOLD_HOURS } from '../domain';
+import { DISCLAIMER, EXPERIMENTAL_DISCLAIMER, STALENESS_THRESHOLD_HOURS } from '../domain';
 
 /**
  * Every public response carries `as_of`, `model_version`, `stale` and the
@@ -11,18 +11,33 @@ export interface Envelope<T> {
   stale: boolean;
   data: T;
   disclaimer: string;
+  /**
+   * Present and `true` only on responses from an experimental engine
+   * (§3 rule 5). Absent otherwise rather than `false`, so an older consumer
+   * that does not know the field cannot mistake its absence for a promise.
+   */
+  experimental?: true;
 }
 
 export function envelope<T>(
   data: T,
-  meta: { as_of?: string | null; model_version?: string | null; stale?: boolean } = {},
+  meta: {
+    as_of?: string | null;
+    model_version?: string | null;
+    stale?: boolean;
+    experimental?: boolean;
+  } = {},
 ): Envelope<T> {
   return {
     as_of: meta.as_of ?? null,
     model_version: meta.model_version ?? null,
     stale: meta.stale ?? false,
     data,
-    disclaimer: DISCLAIMER,
+    // The experimental sentence is appended to the standard disclaimer, never
+    // substituted for it: both claims are true at once, and a consumer diffing
+    // the strings should see exactly what the extra one is.
+    disclaimer: meta.experimental ? `${DISCLAIMER} ${EXPERIMENTAL_DISCLAIMER}` : DISCLAIMER,
+    ...(meta.experimental ? { experimental: true as const } : {}),
   };
 }
 

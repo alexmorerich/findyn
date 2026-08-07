@@ -20,10 +20,15 @@ import { formatDays, formatValue, type Tone } from '../lib/format';
 /**
  * Regime names carry a reading; the colour must not invent one of its own.
  *
- * One table across engines, keyed by the regime name itself. The vocabularies are
- * disjoint by construction (each engine owns its own, per 03-contracts.md §1), so
- * there is no collision to disambiguate — and an unknown name falls through to
- * `info` rather than being coloured by guesswork.
+ * One table across engines, keyed by the regime name itself. Each engine owns its
+ * own vocabulary (03-contracts.md §1) and an unknown name falls through to `info`
+ * rather than being coloured by guesswork.
+ *
+ * The vocabularies were disjoint until P5, which introduced `normal` for crypto
+ * alongside money's. They collide on a name and agree on a tone — both mean "the
+ * ordinary state" and both are `idle` — so one entry serves both. If a future
+ * engine reuses a name and *disagrees* about what it means, this table has to
+ * become keyed by (asset, regime); it is not, because it does not yet need to be.
  */
 const REGIME_TONE: Record<string, Tone> = {
   // rates
@@ -43,6 +48,11 @@ const REGIME_TONE: Record<string, Tone> = {
   hedge_bid: 'idle',
   carry_headwind: 'warn',
   crisis_bid: 'bad',
+  // crypto — how much of the price is momentum. `normal` is `idle` for the same
+  // reason `hedge_bid` is, and `frenzy` is `bad` rather than `ok` despite being
+  // the state in which the price has gone up: this axis is risk, not return.
+  winter: 'warn',
+  frenzy: 'bad',
 };
 
 export function regimeTone(regime: string | null): Tone {
@@ -61,16 +71,24 @@ export function riskTone(score: number | null): Tone {
 function card(summary: AssetSummary): HTMLElement {
   const label = ENGINE_LABELS[summary.asset];
   const title = label?.title ?? summary.asset;
+  // Absent on a Worker older than P5. Treated as false, which is right for every
+  // engine that is not crypto and is the state the site had before P5 anyway.
+  const experimental = summary.experimental === true;
 
   const heading = label?.href
     ? el('a', { class: 'enginecard__title', href: label.href }, title)
     : el('span', { class: 'enginecard__title' }, title);
 
+  // The tag rides in the head beside the regime badge, so it is present in both
+  // card states — an experimental engine that has never run is still one.
+  const tag = experimental ? badge('experimental', 'warn') : null;
+  const shell = experimental ? 'enginecard enginecard--experimental' : 'enginecard';
+
   if (summary.status === 'awaiting_first_run') {
     return el(
       'article',
-      { class: 'enginecard enginecard--idle' },
-      el('div', { class: 'enginecard__head' }, heading, badge('awaiting first run', 'idle')),
+      { class: `${shell} enginecard--idle` },
+      el('div', { class: 'enginecard__head' }, heading, tag, badge('awaiting first run', 'idle')),
       el('p', { class: 'enginecard__blurb' }, label?.blurb ?? 'Registered engine.'),
       el(
         'p',
@@ -84,11 +102,12 @@ function card(summary: AssetSummary): HTMLElement {
 
   return el(
     'article',
-    { class: `enginecard enginecard--${tone}` },
+    { class: `${shell} enginecard--${tone}` },
     el(
       'div',
       { class: 'enginecard__head' },
       heading,
+      tag,
       badge(summary.regime ?? 'unknown', regimeTone(summary.regime)),
     ),
     el('p', { class: 'enginecard__blurb' }, label?.blurb ?? ''),
@@ -111,6 +130,16 @@ function card(summary: AssetSummary): HTMLElement {
         ? `Last published ${formatDays(summary.freshness_days)} ago — this engine has stopped reporting.`
         : `Model ${summary.model_version ?? 'unknown'}`,
     ),
+    // Said on the card, not only in the blurb. Somebody scanning the panel for a
+    // number to act on should not have to open the page to find out this one is
+    // research output.
+    experimental
+      ? el(
+          'p',
+          { class: 'enginecard__detail' },
+          'Research only — no expected return, and excluded from the portfolio layer.',
+        )
+      : null,
     summary.stale ? badge('stale', 'warn') : null,
   );
 }
@@ -133,9 +162,16 @@ export function renderEngines(host: Element, result: ApiResult<AssetList>): void
     return;
   }
 
-  // Live engines first, then the ones still waiting: the panel should lead with
-  // what it can actually tell you.
+  // Experimental engines last, whatever their status; then live before waiting.
+  // The panel should lead with what it can actually tell you, and an engine that
+  // publishes no expected return and is excluded from allocations is not that —
+  // 04-ui-plan.md §P5 asks for it to render last and de-emphasized, and this is
+  // the "last" half. Sorting rather than special-casing `crypto` keeps the panel
+  // the build-once component P1 designed: a second experimental engine needs no
+  // change here.
   const ordered = [...assets].sort((a, b) => {
+    const experimental = Number(a.experimental === true) - Number(b.experimental === true);
+    if (experimental !== 0) return experimental;
     if (a.status !== b.status) return a.status === 'live' ? -1 : 1;
     return 0;
   });

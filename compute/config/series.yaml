@@ -109,6 +109,36 @@ factors:
       # financial conditions, hence direction -1 on the supportive axis.
       - {id: "FRED:DTWEXBGS", provider: fred, frequency: daily, publication_lag_days: 1, direction: -1}
 
+  # P5. The QUANTITY of money — deliberately not the `liquidity` factor above.
+  #
+  # `liquidity` mixes M2 and the Fed's balance sheet with NFCI and overnight RRP
+  # take-up, which makes it a financial-CONDITIONS read: a score that falls when
+  # conditions tighten, whatever the stock of money is doing. That is the right
+  # composite for most consumers and the wrong regressor for FinCrypto, whose
+  # liquidity beta is published as a coefficient with units. A beta on a series
+  # that is half money stock and half conditions index is a number nobody can
+  # state the meaning of.
+  #
+  # Both legs are already ingested for `liquidity`; every loader de-duplicates by
+  # series id, so naming them again costs no fetch and no row. What this block
+  # adds is a second, narrower reading of them.
+  global_liquidity:
+    weight: 1.0
+    series:
+      # US M2, the broad money stock. More money is risk-supportive: direction +1.
+      #
+      # `start` is each series' OWN first observation, so both fetch exactly what
+      # they fetched before — these lines document a boundary rather than move
+      # one. That is deliberate and load-bearing: this is a Layer 0 shared factor
+      # scored on an expanding percentile, so truncating either leg to match the
+      # crypto engine's 2010 price window would silently restate every historical
+      # score of a factor that belongs to no engine. The macro history stays
+      # long; the *price* is what starts in 2010.
+      - {id: "FRED:M2SL",  provider: fred, frequency: monthly, publication_lag_days: 14, direction: 1, start: "1959-01-01"}
+      # Total Fed assets. Weekly, and the faster-moving of the two — QE and QT
+      # show up here months before they reach M2.
+      - {id: "FRED:WALCL", provider: fred, frequency: weekly,  publication_lag_days: 7,  direction: 1, start: "2002-12-18"}
+
 # ---------------------------------------------------------------------------
 # Engine-private series. Nothing here is shared: another engine that needs one
 # of these promotes it into `factors` rather than reaching across the boundary.
@@ -284,6 +314,82 @@ engines:
       # equity RII *is* without learning that FinEquity *exists*, and
       # `lint-imports` enforces that it stays that way.
       equity_rii:   {id: "ENGINE:equity.rii", provider: engine_output, frequency: daily, publication_lag_days: 0}
+
+  crypto:
+    # FinCrypto's inputs (Phase 5) — EXPERIMENTAL, and the engine ships disabled.
+    #
+    # Bitcoin has no exchange calendar: every series whose spine is the price has
+    # an observation on weekends and holidays too, which is why this engine
+    # annualizes on 365 rather than 252. A 252 here would misreport every
+    # volatility and every jump intensity by 20% in the safe-looking direction.
+    series:
+      # The price. Stooq per the phase brief, at lag 0: a daily close is public
+      # the session it prints, and there is no fixing or settlement to wait for.
+      #
+      # Operational note, and it is the same one the equity engine's `backfill`
+      # role carries: stooq.com fronts its CSV with a JavaScript proof-of-work
+      # interstitial that blocks this project's egress and GitHub's runners alike
+      # (re-verified for this symbol 2026-08-05). The adapter is complete and
+      # tested, and `jobs.backfill --from-file` still reaches it from a browser
+      # download — but a nightly run cannot. Hence the fallback below.
+      price:          {id: "STOOQ:BTCUSD",  provider: stooq, frequency: daily, publication_lag_days: 0, start: "2010-07-18"}
+      # Same instrument, keyless, reachable. Yahoo is a fallback by the spec's
+      # reckoning (§5.1 source 7) and unversioned, so treat a schema change as
+      # expected; absent both, the engine publishes nothing and says why.
+      #
+      # `start` is Yahoo's own first bar. Asking earlier does not fail, it just
+      # returns nothing — and the request is what costs on a throttled endpoint.
+      price_fallback: {id: "YAHOO:BTC-USD", provider: yahoo, frequency: daily, publication_lag_days: 0, start: "2014-09-17"}
+      # The deep history, and the reason this block changed. Both closes above
+      # begin in 2014 at the earliest, which cuts 2011 and 2013 out of a sample
+      # that has six cycles in it — so half the cycles were missing from a model
+      # whose confidence ceiling is already justified by how few there are.
+      #
+      # This is a volume-weighted daily AVERAGE across exchanges, not a close.
+      # engines/crypto/prices.py splices it in front of the closes only after
+      # checking the three things that decide whether that is honest (no step at
+      # the seam, no level bias, comparable volatility) and flags every date it
+      # supplied. Read that module before changing this line.
+      #
+      # `start` is the first date bitcoin had a market price at all. The chart is
+      # padded with 0.0 back to the genesis block; the adapter drops those,
+      # because "no market yet" is not a price of zero.
+      price_history:  {id: "BLOCKCHAIN:MARKET_PRICE", provider: blockchain, frequency: daily, publication_lag_days: 1, start: "2010-08-18"}
+
+      # The macro leg. Same two series as the `global_liquidity` factor, declared
+      # here as roles because the engine regresses on the LEVEL CHANGE and the
+      # factor publishes a 0-100 percentile — a regression of returns on a
+      # percentile has a slope, but not one anybody can put units on. The factor
+      # score is published beside the beta as a cross-check, never as its input;
+      # this is the same split gold makes between its drivers and Layer 0.
+      m2:             {id: "FRED:M2SL",  provider: fred, frequency: monthly, publication_lag_days: 14}
+      central_bank_assets: {id: "FRED:WALCL", provider: fred, frequency: weekly, publication_lag_days: 7}
+
+      # --- On-chain -------------------------------------------------------
+      # Keyless, from blockchain.info (data/providers/blockchain.py). A daily
+      # chart point covers a UTC day and is complete only once that day ends, so
+      # the lag is 1 — asserted by the adapter as well, because the reason is
+      # structural rather than a publisher's schedule.
+      #
+      # `tx_volume_usd` is the volume leg of the speculation index. USD rather
+      # than BTC deliberately: constant BTC volume at ten times the price is ten
+      # times the speculation, and a BTC-denominated series cannot say so.
+      tx_volume_usd:  {id: "BLOCKCHAIN:TX_VOLUME_USD",     provider: blockchain, frequency: daily, publication_lag_days: 1}
+      # Network usage, independent of price entirely — the honest adoption read.
+      active_addresses: {id: "BLOCKCHAIN:N_UNIQUE_ADDRESSES", provider: blockchain, frequency: daily, publication_lag_days: 1}
+      transactions:   {id: "BLOCKCHAIN:N_TRANSACTIONS",    provider: blockchain, frequency: daily, publication_lag_days: 1}
+      # Security spend: the one on-chain series with a real cost floor behind it.
+      hash_rate:      {id: "BLOCKCHAIN:HASH_RATE",         provider: blockchain, frequency: daily, publication_lag_days: 1}
+      #
+      # NOT DECLARED, and deliberately: MVRV, SOPR, realized cap and
+      # coin-days-destroyed. They are the metrics this model would most like to
+      # have and every one of them is a Glassnode / Coin Metrics product behind a
+      # paid key. Declaring an id against a provider with no adapter would defer
+      # the failure from config load to the first fetch, which is exactly what
+      # core/config.py::VALID_PROVIDERS exists to prevent. The TODO naming what
+      # adding one costs is in data/providers/registry.py, beside the table it
+      # would have to be added to. Every on-chain role above is optional to the
+      # engine, so the ones that do exist already degrade correctly without them.
 
 # Cached in KV with a short TTL for the dashboard's live tiles (§6).
 realtime_cache:

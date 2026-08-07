@@ -284,6 +284,10 @@ def test_the_data_layer_populated_the_provider_registry():
         # FRED delisted the LBMA gold series it used to carry, so there is no
         # longer a FRED route to the fix at all.
         "lbma",
+        # P5. Keyless Bitcoin network metrics. The paid on-chain vendors are
+        # deliberately absent — an id here without an adapter would defer a
+        # config typo to the first fetch (see the TODO in providers/registry.py).
+        "blockchain",
     }
 
 

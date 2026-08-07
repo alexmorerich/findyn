@@ -7,6 +7,7 @@ import json
 import logging
 import os
 from collections.abc import Iterator
+from datetime import date, timedelta
 from typing import Any
 from urllib.parse import quote
 
@@ -44,6 +45,39 @@ def base_parser(description: str) -> argparse.ArgumentParser:
 #: Re-exported from core so the write-back and the artifact client cannot drift
 #: apart. Must stay byte-identical to serving/src/admin/hmac.ts::verifyHmac.
 sign_payload = sign
+
+
+def refit_cutoff(run_date: date) -> date:
+    """The information set a refit fits on: the end of the last completed month.
+
+    A refit's cutoff is **derived from the calendar, not from the clock**, and
+    that is the whole point. Fitting "as of now" made the artifact a function of
+    when the container happened to start, which is how two refits on 2026-08-01 —
+    a manual dispatch at 01:13 and the scheduled run at 04:00, five and a half
+    hours and several new observations apart — produced different parameters
+    under the same ``model_version`` on the same calendar date, and the second
+    one 409'd against the first (issue #6).
+
+    Deriving the cutoff instead makes every run within a month see the same
+    information set, so they produce byte-identical artifacts and land on the
+    existing idempotent path in ``putArtifact`` rather than on the conflict. It
+    also makes "the August fit" a well-defined object: a thing that can be
+    reproduced later from the same inputs, rather than a thing that depended on a
+    scheduler's timing.
+
+    The cost is deliberate and worth stating plainly: the fit is a few days stale
+    by construction. A refit run on 15 August ignores the first fortnight of
+    August. For a model refitted monthly on an expanding window of decades, that
+    is a rounding error against the reproducibility it buys — but it *is* a real
+    choice, not a free one.
+
+    Idempotency is exact only as far as the sources are. A provider that silently
+    restates an old observation without a vintage — NFCI is the one this repo
+    knows about — can still move the bytes between two runs of the same month.
+    That is a data-fidelity problem rather than a scheduling one, and it now fails
+    loudly as a conflict instead of being absorbed by a moving cutoff.
+    """
+    return run_date.replace(day=1) - timedelta(days=1)
 
 
 def write_back(payload: dict[str, Any], *, dry_run: bool = False) -> None:

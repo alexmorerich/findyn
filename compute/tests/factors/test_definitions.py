@@ -12,8 +12,8 @@ from findynamics.core.contracts import vocab
 from findynamics.factors.definitions import FACTORS, factor_series_ids, factor_specs
 
 
-def test_the_factor_set_is_the_nine_v1_forces_plus_the_p1_additions():
-    """The nine keep their order; P1 appends rather than reshuffling.
+def test_the_factor_set_is_the_nine_v1_forces_plus_later_additions():
+    """The nine keep their order; later phases append rather than reshuffling.
 
     Order is load-bearing — serving mirrors this tuple as FORCES and the drift
     test compares them element by element.
@@ -28,9 +28,32 @@ def test_the_factor_set_is_the_nine_v1_forces_plus_the_p1_additions():
         "labor",
         "risk_appetite",
         "sentiment",
+        # P1
         "real_rate",
         "usd_strength",
+        # P5 — the money stock, distinct from `liquidity`'s conditions read.
+        "global_liquidity",
     )
+
+
+def test_global_liquidity_is_not_a_second_name_for_liquidity():
+    """The two factors are different questions, and must stay different series.
+
+    `liquidity` blends the money stock with NFCI and overnight RRP take-up, which
+    makes it a financial-conditions score. `global_liquidity` is the stock alone,
+    because FinCrypto publishes a regression coefficient against it and a beta on
+    a half-conditions composite has no statable units. If someone ever "tidies
+    up" by pointing them at the same series list, this fails.
+    """
+    from findynamics.factors.definitions import factor_specs
+
+    specs = factor_specs()
+    conditions = {s.id for s in specs["liquidity"].series}
+    stock = {s.id for s in specs["global_liquidity"].series}
+
+    assert stock == {"FRED:M2SL", "FRED:WALCL"}
+    assert stock < conditions, "global_liquidity must be the stock legs only"
+    assert conditions - stock, "liquidity must keep its conditions legs"
 
 
 def test_definitions_re_export_the_single_canonical_tuple():

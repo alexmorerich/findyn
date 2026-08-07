@@ -46,6 +46,12 @@ export interface Envelope<T> {
   stale: boolean;
   data: T;
   disclaimer: string;
+  /**
+   * Present and `true` only on responses from an experimental engine.
+   * Absent otherwise rather than `false`, so this file's older readers cannot
+   * mistake its absence for a promise.
+   */
+  experimental?: true;
 }
 
 export interface Meta {
@@ -187,6 +193,12 @@ export interface AssetSummary {
   confidence: number | null;
   stale: boolean;
   freshness_days: number | null;
+  /**
+   * Research-only engine, excluded from the portfolio layer. Optional because
+   * a deployed Worker older than P5 does not send it; treated as `false` when
+   * absent, which is the safe default for every engine that is not crypto.
+   */
+  experimental?: boolean;
 }
 
 export interface AssetList {
@@ -263,7 +275,11 @@ export const ENGINE_LABELS: Record<string, { title: string; blurb: string; href?
     blurb: 'Trust and crisis protection — regime switching on real rates',
     href: '/gold',
   },
-  crypto: { title: 'FinCrypto', blurb: 'Network scarcity — experimental, excluded from portfolios' },
+  crypto: {
+    title: 'FinCrypto',
+    blurb: 'Network scarcity — experimental, no expected return, excluded from portfolios',
+    href: '/crypto',
+  },
 };
 
 // ---------------------------------------------------------------------------

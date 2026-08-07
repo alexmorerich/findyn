@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 
 import pytest
@@ -20,6 +21,7 @@ from tests.engines.equity.conftest import (
     DEEP_HISTORY,
     PRIMARY,
     REGIME_PROXY,
+    SNAPSHOT_AS_OF,
     world_from,
 )
 
@@ -173,6 +175,75 @@ def test_fit_freezes_parameters_for_every_resolved_role(
     for body in document["series"].values():
         assert body["ffd"]["d"] >= 0.0
         assert body["kalman"]["irregular"] > 0.0
+
+
+def test_the_artifact_carries_no_wall_clock_timestamp(
+    equity_engine, equity_observations, artifacts
+):
+    """Issue #6: an artifact must be a function of its inputs, not of the clock.
+
+    The store compares bytes and refuses a changed payload under the same
+    ``(model_version, fit date)``. A ``fitted_at`` recording when the container
+    happened to run made every refit differ by construction, so a second run on
+    one date was rejected as a conflict — while adding nothing, because the fit
+    date is already the key and R2 records the write time as object metadata.
+
+    Asserted structurally rather than by name: any field whose value looks like a
+    wall-clock timestamp would reintroduce the same failure under a new spelling.
+    ``as_of`` is a plain date and is exactly what should be here.
+    """
+    equity_engine.fit(world_from(equity_observations))
+    document = artifacts.load(ARTIFACT_NAME)
+
+    assert "fitted_at" not in document
+    assert document["as_of"] == SNAPSHOT_AS_OF.isoformat()
+
+    stamped = [
+        key
+        for key, value in document.items()
+        if isinstance(value, str)
+        and re.fullmatch(r"\d{4}-\d{2}-\d{2}T[\d:.]+(?:[+-][\d:]+|Z)?", value)
+    ]
+    assert not stamped, f"wall-clock timestamp(s) back in the artifact: {stamped}"
+
+
+def test_two_fits_on_one_information_set_agree_on_what_they_publish(
+    config, artifacts, tmp_path, equity_observations
+):
+    """The invariant worth holding: *semantic* equivalence, not byte equality.
+
+    Two fits of the same specification on the same information set differ in
+    their raw parameters — measured on the real snapshot, 128 float fields with a
+    maximum relative difference of 3.3e-08, because multithreaded BLAS does not
+    fix its reduction order. Every one of those differences is inert by the time
+    it reaches a consumer: the regime posteriors agree to 4.7e-10 across 24,364
+    dates, no date's label changes, and the published state is identical field
+    for field.
+
+    So this asserts what a reader of the dashboard would notice, which is
+    nothing. Byte equality is available too — pin the BLAS thread count — but it
+    is a stronger promise than the system needs and a slower one to keep.
+    """
+    from findynamics.core.artifacts import ArtifactStore
+
+    world = world_from(equity_observations)
+    published = []
+    for name in ("first", "second"):
+        store = ArtifactStore(tmp_path / name)
+        engine = EquityEngine(config, store)
+        engine.fit(world)
+        engine._cache = None
+        published.append(engine.predict(world))
+
+    first, second = published
+    assert first.regime == second.regime
+    assert first.risk_score == second.risk_score
+    assert first.confidence == second.confidence
+    assert first.expected_return == second.expected_return
+    assert (first.components or {}) == (second.components or {})
+    assert [(s.name, s.value, s.direction) for s in first.signals] == [
+        (s.name, s.value, s.direction) for s in second.signals
+    ]
 
 
 def test_the_frozen_d_differs_between_series(equity_engine, equity_observations, artifacts):
