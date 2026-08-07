@@ -46,6 +46,7 @@ from findynamics.engines.equity.features.kalman import (
     filter_state,
 )
 from findynamics.engines.equity.features.kinematics import (
+    DEFAULT_BURN_IN_YEARS,
     DEFAULT_MOMENTUM_MONTHS,
     DEFAULT_Z_MIN_YEARS,
     Kinematics,
@@ -80,6 +81,9 @@ class FeatureParams:
     z_min_years: float = DEFAULT_Z_MIN_YEARS
     momentum_months: tuple[int, ...] = DEFAULT_MOMENTUM_MONTHS
     kalman_maxiter: int = DEFAULT_MAXITER
+    #: Leading years of filtered slope discarded before the derivatives are
+    #: published — the diffuse prior washing out, not a market trend.
+    kalman_burn_in_years: float = DEFAULT_BURN_IN_YEARS
 
     @classmethod
     def from_params(cls, params: dict[str, Any] | None) -> FeatureParams:
@@ -96,6 +100,7 @@ class FeatureParams:
             z_min_years=float(block.get("z_min_years", DEFAULT_Z_MIN_YEARS)),
             momentum_months=(tuple(int(m) for m in months) if months else DEFAULT_MOMENTUM_MONTHS),
             kalman_maxiter=int(block.get("kalman_maxiter", DEFAULT_MAXITER)),
+            kalman_burn_in_years=float(block.get("kalman_burn_in_years", DEFAULT_BURN_IN_YEARS)),
         )
 
 
@@ -235,6 +240,7 @@ def compute_features(
         ffd=ffd_price,
         momentum_months=resolved.momentum_months,
         z_min_years=resolved.z_min_years,
+        burn_in_years=resolved.kalman_burn_in_years,
     )
 
     columns: dict[str, pd.Series] = {
@@ -264,16 +270,22 @@ def compute_features(
         "kalman_converged": float(state.converged),
         "jerk_baseline_periods": float(kin.baseline_periods),
         "jerk_baseline_is_short": float(kin.baseline_is_short),
+        "kalman_burn_in_periods": float(kin.burn_in_periods),
+        "kalman_burn_in_is_short": float(kin.burn_in_is_short),
         "observations": float(len(clean)),
     }
 
     log.info(
-        "%s features: %d rows, d=%.2f (p=%.3g), %d momentum window(s), frozen=%s",
+        "%s features: %d rows %s → %s, d=%.2f (p=%.3g), %d momentum window(s), "
+        "%d discarded to filter start-up, frozen=%s",
         series.series_id,
         len(frame),
+        frame.index[0].date(),
+        frame.index[-1].date(),
         ffd_fit.d,
         ffd_fit.p_value,
         len(kin.momentum),
+        kin.burn_in_periods,
         frozen_params.kalman is not None or frozen_params.ffd is not None,
     )
 

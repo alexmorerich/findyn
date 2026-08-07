@@ -20,9 +20,10 @@ prices:
 
 features:
   # Fractional differentiation (§8.2). `d` is searched on the training window
-  # and frozen PER SERIES: the publication series holds ten years and the
-  # calibration series forty, and their minimum stationary `d` has no reason to
-  # be the same number. One shared `d` is a silent error, not a simplification.
+  # and frozen PER SERIES: a century of daily S&P and a century and a half of
+  # monthly Shiller have no reason to share a minimum stationary `d`, and on the
+  # real snapshot they do not (0.60 against 0.35). One shared `d` is a silent
+  # error, not a simplification.
   ffd_threshold: 1.0e-5
   # ADF at 95% confidence, as the spec specifies.
   ffd_significance: 0.05
@@ -35,10 +36,28 @@ features:
   ffd_max_memory_years: 1.0
 
   # Expanding-window baseline for the jerk z-score (§8.3 asks for ten years).
-  # FRED:SP500 is licence-capped to roughly ten years in total, so the baseline
-  # degrades to half the available history rather than emitting a column of NaN;
-  # when it does, the state says so (`jerk_baseline_is_short`).
+  # The publication path is spliced back to 1927, so the full decade is now
+  # available and `jerk_baseline_is_short` reports 0 where it used to report 1.
+  # The degradation path is kept for the configuration that loses the backfill:
+  # rather than emitting a column of NaN the baseline falls to half the
+  # available history, and the state says that it did.
   z_min_years: 10.0
+
+  # Leading years of filtered slope discarded before velocity, acceleration and
+  # jerk are published. The local linear trend starts from a diffuse prior — a
+  # slope standard error of 1e3 — and the derivatives it produces on the way
+  # down are a statement about that prior, not about the market: the first value
+  # on the 1927 path was +142% annualized on 1928-01-03.
+  #
+  # One year is where the slope's own filtered standard error first comes within
+  # a factor of two of the value it converges to (1.9x at 252 observations, 6.9x
+  # at 20). In years so that the same number means 252 observations on the daily
+  # paths and 12 on the monthly deep history.
+  #
+  # Setting this to 0 does not merely restore the old chart; it re-inflates the
+  # expanding jerk baseline by 3.2x for every date thereafter, which is what used
+  # to rate Black Monday 1987 at |z| = 2.95 — just under the lamp threshold.
+  kalman_burn_in_years: 1.0
 
   # Momentum windows in months (§2.1's 21/63/252 trading days). Months rather
   # than observations so the same numbers mean the same spans on the daily paths
@@ -96,6 +115,11 @@ outputs:
   # daily S&P record, so one deliberate run puts the whole history in D1 and
   # `/equity` can chart it. Running this nightly is the mistake the split
   # exists to prevent.
+  #
+  # One such run is what publishes the century: ~24,500 dates of velocity and
+  # acceleration, plus the posterior and the crash factors on the same dates.
+  # The nightly window stays at five years because everything older is an
+  # unchanged upsert.
   backfill_history_days: 40000
 
 # §3.2 / §4 — the instability index and the crash decomposition.

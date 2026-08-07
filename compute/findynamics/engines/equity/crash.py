@@ -590,23 +590,45 @@ def crash_history(
     liquid = column(liquidity)
     curve = column(curve_slope)
 
-    transmission = np.array(
-        [
-            transmission_score(
-                credit_spread=credit[i],
-                credit_velocity=velocity[i],
-                liquidity=liquid[i],
-                curve_slope=curve[i],
-            )[0]
-            for i in range(len(posteriors))
-        ]
-    )
+    scored = [
+        transmission_score(
+            credit_spread=credit[i],
+            credit_velocity=velocity[i],
+            liquidity=liquid[i],
+            curve_slope=curve[i],
+        )
+        for i in range(len(posteriors))
+    ]
+    transmission = np.array([score for score, _ in scored])
+
+    # A *history* is not a snapshot, and the no-inputs fallback is only right for
+    # one of them.
+    #
+    # `transmission_score` returns 1.0 when it has nothing to read, which is the
+    # correct conservative answer for today's state: the factor multiplies crash
+    # risk, the alternative guess of 0 would silently zero the published number,
+    # and a feed that is down for a day should not read as safety.
+    #
+    # Applied down a century it says something entirely different. The credit and
+    # liquidity series begin in the 1960s at the earliest, so every date before
+    # them scores exactly 1.0 — and a published series reading "a shock would
+    # transmit with certainty" on every session from 1929 to 2000 is not a
+    # fallback, it is a seventy-year alarm asserted from the absence of data.
+    # Those dates are blanked here so they are not published at all; the engine
+    # drops non-finite values, so the factors simply begin where they can be
+    # measured. Today's snapshot still gets 1.0 from `crash_factors`.
+    unmeasured = np.array([detail["transmission_inputs"] == 0.0 for _, detail in scored])
+    transmission = np.where(unmeasured, np.nan, transmission)
 
     return pd.DataFrame(
         {
             "p_transition": p_transition,
             "p_shock": p_shock,
             "p_transmission": transmission,
+            # NaN propagates, so the composite disappears on exactly the dates
+            # one of its factors could not be measured. §4's rule is that the
+            # three are published together or not at all, and that has to hold
+            # per date rather than per run.
             "crash_risk": 100.0 * p_transition * p_shock * transmission,
         },
         index=posteriors.index,

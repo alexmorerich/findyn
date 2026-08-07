@@ -642,6 +642,64 @@ mismatch still refuses the series, and a decimal error is still flagged.
 
 ---
 
+## 21. The published RII now reaches 1929, and its component set does not
+
+**Status:** shipped. A consequence of splicing the publication path, recorded
+because it is the mirror image of issue 12 and the same lesson catches it.
+
+The publication feature path is now `FRED:SP500` spliced behind the daily S&P
+record back to 1927-12-30 (`engines/equity/prices.py::publication_path`), which
+is what gives `velocity` and `acceleration` a century instead of a decade. Every
+per-date series keyed on the publication dates got longer with them — including
+`rii` and the three crash factors, which a full-history run now publishes from
+**1929-08-02**.
+
+The RII was already computed over the century; issue 12 is why. What changed is
+that the whole of it is now *published* rather than sliced to the last ten years.
+And its inputs do not all reach that far:
+
+| component | earliest input |
+|---|---|
+| posterior entropy, confidence deficit | 1929 — derived from price |
+| jerk, vol-of-vol | 1929 — derived from price |
+| equity–bond correlation | `FRED:DGS10`, 1962 |
+| liquidity stress | `FRED:NFCI`, 1971 |
+| credit spread | `FRED:BAMLH0A0HYM2`, **2023** through the key in use (issue 14) |
+
+`compute_rii` renormalizes the weights **per date** over the components that have
+a value there, so a 1930 reading is a correct composite of the four things
+measurable in 1930 rather than a seven-component index with three zeros in it.
+That is the designed behaviour and it is right. What is not visible is that the
+1930 reading and the 2026 reading are composites of *different things*:
+`rii_components_missing` describes the run, not the date.
+
+`p_transmission` was worse and is fixed rather than documented. Its inputs are
+the credit spread, financial conditions and the curve, none of which exist before
+the 1960s, and `transmission_score` returns **1.0** when it has no inputs at all.
+That is the right conservative answer for today's snapshot — the factor is a
+multiplier, and guessing 0 would silently zero the published number — but as a
+*history* it published "a shock would transmit with certainty" on every session
+from 1929 to 2000, an alarm asserted from the absence of data and multiplied
+straight into `crash_risk`. `crash_history` now blanks those dates instead, so
+both factors begin where they can be measured (2000-01-03 on the committed
+snapshot) and §4's "all three or none" holds per date rather than per run.
+`crash_factors`, which answers about today, is unchanged.
+
+**How to read it:** the kinematic series (`price_close`, `price_filtered`,
+`velocity`, `acceleration`, `jerk_z`) are the ones the extension was built for
+and are computed from price alone on every date they cover. The instability block
+is a *partial* composite everywhere its inputs are — which, given issue 14, is
+everywhere before 2023 for the credit leg. Lengthening the published window did
+not make that worse; it made it a century wide instead of a decade, and therefore
+much harder to overlook.
+
+**What would fix it:** publish per-date component coverage as its own metric, so
+a chart can grey the stretch where the index is built from four of seven. That
+adds a name to `CHART_METRICS`, which is a schema change, so it belongs in a
+version bump rather than beside this one.
+
+---
+
 ## Smaller things
 
 - **`derived_features` and `engine_output` overlap.** The kinematic path is

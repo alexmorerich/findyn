@@ -1,7 +1,7 @@
 import type { Env } from '../types';
 import { FORCES, REGIMES } from '../domain';
 import { MIN_THRESHOLD, decimate } from '../lib/decimate';
-import { MAX_HISTORY_ROWS } from './assets';
+import { maxHistoryRowsPerDate } from './assets';
 
 /**
  * The v1 read surface (FINDYN_V1_SPEC.md §13): `/state` and `/forces`.
@@ -283,13 +283,18 @@ export async function getRegimeHistory(
     bindings.push(opts.to);
   }
 
+  // Five rows to a date, so the ceiling is scaled by five: read as a flat row
+  // count it would have cut the century of posteriors off in the 1970s and
+  // called the result truncated, which is honest about the response and useless
+  // about the market.
+  const ceiling = maxHistoryRowsPerDate(REGIMES.length);
   const { results } = await env.DB.prepare(
     `SELECT date, regime, probability FROM regime_state
       WHERE ${conditions.join(' AND ')}
       ORDER BY date ASC
       LIMIT ?`,
   )
-    .bind(...bindings, MAX_HISTORY_ROWS)
+    .bind(...bindings, ceiling)
     .all<{ date: string; regime: string; probability: number }>();
 
   const byDate = new Map<string, Record<string, number>>();
@@ -339,7 +344,7 @@ export async function getRegimeHistory(
     asset,
     count: points.length,
     available: all.length,
-    truncated: (results ?? []).length >= MAX_HISTORY_ROWS,
+    truncated: (results ?? []).length >= ceiling,
     decimated,
     regimes: REGIMES,
     model_version: newest.model_version,
@@ -405,13 +410,17 @@ export async function getInstability(
     bindings.push(opts.to);
   }
 
+  // Five metrics to a date, so the ceiling is scaled by five for the same reason
+  // `/regime` scales it by the regime count — this endpoint has no `truncated`
+  // field to fall back on, so a ceiling it can reach is a ceiling that shortens
+  // the series with nothing in the response saying so.
   const { results } = await env.DB.prepare(
     `SELECT as_of, metric, value FROM engine_output
       WHERE ${conditions.join(' AND ')}
       ORDER BY as_of ASC
       LIMIT ?`,
   )
-    .bind(...bindings, MAX_HISTORY_ROWS)
+    .bind(...bindings, maxHistoryRowsPerDate(INSTABILITY_METRICS.length))
     .all<{ as_of: string; metric: string; value: number }>();
 
   const byDate = new Map<string, Record<string, number>>();

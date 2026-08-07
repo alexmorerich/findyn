@@ -88,6 +88,16 @@ def designs(equity_observations, config_module):
     built["proxy"] = build_design(
         compute_features(prices_mod.price_path(world.series, proxy_series), proxy_series)
     )
+
+    # The publication series *unextended* — FRED:SP500 on its own, the ten years
+    # it licences. `built["publication"]` is the spliced century now, so without
+    # this the sample-size argument for fitting elsewhere would have nothing left
+    # to measure itself against, and the fallback configuration would go untested
+    # exactly as the module docstring warns.
+    primary = analysis.roles.publication
+    built["primary_only"] = build_design(
+        compute_features(prices_mod.price_path(world.series, primary), primary)
+    )
     return built
 
 
@@ -254,7 +264,7 @@ def test_the_assertions_reject_raw_dimensional_features(designs):
 # --- what the transfer produces ----------------------------------------------
 
 
-def test_the_publication_window_is_too_thin_to_fit_five_states_on(separate_fits, designs):
+def test_the_licenced_window_alone_is_too_thin_to_fit_five_states_on(separate_fits, designs):
     """Why the fit runs on a longer series at all.
 
     The first version of this asserted that the S&P-only fit's ``bear`` state is
@@ -264,17 +274,22 @@ def test_the_publication_window_is_too_thin_to_fit_five_states_on(separate_fits,
     local optimum, not of the design.
 
     The durable claim is about sample size. A five-state model needs enough
-    observations of each state for its covariance to mean anything, and the
-    publication window has an order of magnitude fewer — which is the actual
-    reason the fit runs elsewhere, and does not depend on where EM landed.
+    observations of each state for its covariance to mean anything, and ten years
+    has an order of magnitude fewer.
+
+    Measured against ``primary_only`` rather than ``publication``, and the change
+    is the finding: the publication path is now the daily record spliced back to
+    1927, so it is no longer the thin series this argument is about. What stayed
+    thin is ``FRED:SP500`` on its own, which is what the engine falls back to
+    when the backfill is unavailable — and that is the configuration where
+    fitting elsewhere is still load-bearing.
     """
-    publication = designs["publication"]
+    licenced = designs["primary_only"]
     proxy = designs["proxy"]
 
-    assert len(proxy) > 4 * len(publication), (
-        f"the fitting series has {len(proxy)} rows against the publication "
-        f"series' {len(publication)}; if that gap has closed, the split deserves "
-        "revisiting"
+    assert len(proxy) > 4 * len(licenced), (
+        f"the fitting series has {len(proxy)} rows against the licenced window's "
+        f"{len(licenced)}; if that gap has closed, the split deserves revisiting"
     )
 
     cal_bear = separate_fits["proxy"].stats_for("bear")
@@ -283,6 +298,24 @@ def test_the_publication_window_is_too_thin_to_fit_five_states_on(separate_fits,
         f"the fitting series' bear state returns {cal_bear.mean_return:.1%}; a "
         "bear market that makes money is a labelling failure, not a finding"
     )
+
+
+def test_the_splice_is_what_closed_that_gap(designs):
+    """The other half: the published path is no longer the thin one.
+
+    Asserted as a *ratio against the licenced window* rather than as a row count,
+    so it keeps meaning something as the rolling ten years move. If this fails
+    while the test above passes, the splice has silently stopped happening and
+    the century of velocity has quietly become a decade again.
+    """
+    publication = designs["publication"]
+    licenced = designs["primary_only"]
+
+    assert len(publication) > 4 * len(licenced), (
+        f"the publication design has {len(publication)} rows against the licenced "
+        f"window's {len(licenced)}; the backfill is not being spliced in"
+    )
+    assert publication.frame.index[0].year < 1930
 
 
 @pytest.mark.parametrize("which", ["publication", "proxy"])

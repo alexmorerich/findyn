@@ -43,6 +43,35 @@ JERK_EXTREME_Z = 3.0
 #: §8.3 — z-normalization baseline, expanding, minimum ten years.
 DEFAULT_Z_MIN_YEARS = 10.0
 
+#: How much of the start of a filtered path is discarded before its derivatives
+#: are published, in years.
+#:
+#: The local linear trend is initialized diffusely: the filter starts with a
+#: slope standard error of 1e3 and shrinks it as observations arrive. Measured on
+#: the 1927+ S&P path it is 6.9x its converged value after 20 observations, 1.9x
+#: after 252 and 1.2x after 656. The velocities that come out of that stretch are
+#: a statement about the prior, not about the market — the first published value
+#: on the century path was **+142% annualized**, on 1928-01-03, and the same
+#: artifact was visible on the ten-year path as a -177% spike in August 2016.
+#:
+#: One year, because that is where the slope's own uncertainty comes inside a
+#: factor of two of where it ends up, and because expressing it in years means
+#: the same number is 252 observations on a daily path and 12 on the monthly
+#: deep history rather than one span meaning two things.
+#:
+#: It is not cosmetic. ``jerk_z`` is scored against an **expanding** baseline, so
+#: the start-up transient inflates the denominator for every later date and never
+#: washes out: across the century the untrimmed baseline is 3.2x too wide, which
+#: leaves 4 elevated readings in 22,241 sessions and — the tell — rates Black
+#: Monday 1987 at |z| = 2.95, just under the threshold at which the lamp would
+#: have lit.
+DEFAULT_BURN_IN_YEARS = 1.0
+
+#: Never discard more than this share of a path. A series too short to give up a
+#: year to the filter's start-up should publish a noisier estimate and say so,
+#: not publish a column of NaN.
+MAX_BURN_IN_FRACTION = 0.5
+
 #: Floor for the baseline when the series is shorter than ten years. Two years
 #: of observations is not a decade, and a z-score built on it is noisier — which
 #: is why the effective baseline is reported rather than assumed.
@@ -70,6 +99,10 @@ class Kinematics:
     baseline_periods: int
     #: True when the baseline had to fall below ten years for lack of history.
     baseline_is_short: bool
+    #: Leading observations whose derivatives were discarded as filter start-up.
+    burn_in_periods: int = 0
+    #: True when the path was too short to give up a full year to start-up.
+    burn_in_is_short: bool = False
 
 
 def baseline_window(
@@ -91,6 +124,26 @@ def baseline_window(
         return wanted, False
     floor = int(round(MIN_Z_YEARS * periods_per_year))
     return max(floor, observations // 2), True
+
+
+def burn_in_window(
+    observations: int,
+    periods_per_year: float,
+    *,
+    years: float = DEFAULT_BURN_IN_YEARS,
+) -> tuple[int, bool]:
+    """Leading observations to discard as filter start-up, and whether it is short.
+
+    Capped at :data:`MAX_BURN_IN_FRACTION` of the path for the same reason
+    :func:`baseline_window` has a floor: a transform that returns nothing on a
+    short series is worse than one that returns something noisier and reports
+    that it did.
+    """
+    wanted = max(int(round(years * periods_per_year)), 0)
+    ceiling = int(observations * MAX_BURN_IN_FRACTION)
+    if wanted <= ceiling:
+        return wanted, False
+    return max(ceiling, 0), True
 
 
 def expanding_z(series: pd.Series, min_periods: int) -> pd.Series:
@@ -132,27 +185,48 @@ def kinematics(
     ffd: pd.Series | None = None,
     momentum_months: tuple[int, ...] = DEFAULT_MOMENTUM_MONTHS,
     z_min_years: float = DEFAULT_Z_MIN_YEARS,
+    burn_in_years: float = DEFAULT_BURN_IN_YEARS,
 ) -> Kinematics:
     """Derive the kinematic block from a filtered slope path.
 
     ``ffd`` is the fractionally differenced price the momentum windows are summed
     over — momentum on the raw level would be a level, not a momentum. Absent it,
     the momentum block comes back empty rather than being faked off the slope.
+
+    The start of the slope path is discarded rather than published: see
+    :data:`DEFAULT_BURN_IN_YEARS`. Discarded here rather than in the filter so
+    that ``price_filtered`` keeps its full span — the *level* is pinned by the
+    first observation, and only the *slope* has to be estimated out of a diffuse
+    prior.
     """
-    velocity = (slope * periods_per_year).rename("velocity")
+    burn_in, burn_in_is_short = burn_in_window(len(slope), periods_per_year, years=burn_in_years)
+    settled = slope.copy()
+    if burn_in:
+        settled.iloc[:burn_in] = np.nan
+    if burn_in_is_short:
+        log.info(
+            "kinematics: %d observations cannot give up %.0f year(s) to the filter's "
+            "start-up; discarding %d instead, so the earliest derivatives carry more "
+            "of the diffuse prior than usual",
+            len(slope),
+            burn_in_years,
+            burn_in,
+        )
+
+    velocity = (settled * periods_per_year).rename("velocity")
     # diff() of an annualized rate is per period; scaling again gives per year
     # squared, so acceleration and velocity are on consistent time units.
     acceleration = (velocity.diff() * periods_per_year).rename("acceleration")
     jerk_raw = acceleration.diff()
 
     min_periods, is_short = baseline_window(
-        len(slope.dropna()), periods_per_year, min_years=z_min_years
+        len(settled.dropna()), periods_per_year, min_years=z_min_years
     )
     if is_short:
         log.info(
             "kinematics: %d observations is under %.0f years; the jerk baseline "
             "uses %d periods instead",
-            len(slope.dropna()),
+            len(settled.dropna()),
             z_min_years,
             min_periods,
         )
@@ -173,18 +247,23 @@ def kinematics(
         momentum=momentum,
         baseline_periods=min_periods,
         baseline_is_short=is_short,
+        burn_in_periods=burn_in,
+        burn_in_is_short=burn_in_is_short,
     )
 
 
 __all__ = [
+    "DEFAULT_BURN_IN_YEARS",
     "DEFAULT_MOMENTUM_MONTHS",
     "DEFAULT_Z_MIN_YEARS",
+    "MAX_BURN_IN_FRACTION",
     "JERK_ELEVATED_Z",
     "JERK_EXTREME_Z",
     "JERK_LAMP_CODES",
     "MIN_Z_YEARS",
     "Kinematics",
     "baseline_window",
+    "burn_in_window",
     "expanding_z",
     "jerk_lamp",
     "kinematics",

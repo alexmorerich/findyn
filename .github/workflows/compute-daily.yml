@@ -16,6 +16,16 @@ on:
         description: "Compute without writing back"
         type: boolean
         default: true
+      full_history:
+        description: >
+          Republish every engine's per-date series from the start of its data
+          instead of the nightly window. Run this once after a model version
+          bump that changes historical values — FinEquity's is ~24,700 dates
+          back to 1927-12-30, which the nightly five-year window never reaches.
+          Never on the schedule: it would write a century every night to add
+          one row.
+        type: boolean
+        default: false
   schedule:
     - cron: "0 3 * * 2-6"   # 03:00 UTC, after the previous session's close
 
@@ -43,4 +53,5 @@ jobs:
         run: |
           python -m jobs.daily \
             ${{ inputs.as_of && format('--as-of {0}', inputs.as_of) || '' }} \
-            ${{ inputs.dry_run && '--dry-run' || '' }}
+            ${{ inputs.dry_run && '--dry-run' || '' }} \
+            ${{ inputs.full_history && '--full-history' || '' }}
