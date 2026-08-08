@@ -48,14 +48,23 @@ jobs:
             ${{ inputs.as_of && format('--as-of {0}', inputs.as_of) || '' }} \
             ${{ inputs.dry_run && '--dry-run' || '' }}
 
-      # Fitted parameters are model output, not source, so they are not
-      # committed. Keeping them as an artifact means a refit can be inspected
-      # and the previous one restored without re-running it.
-      - name: Publish fitted parameters
+      # Read the fit back out of R2 and check it is usable.
+      #
+      # This replaces an `upload-artifact` step that claimed to publish the
+      # fitted parameters and published nothing: a production refit sets both
+      # admin secrets, so `build_artifact_store` returns the R2 store and
+      # `compute/artifacts/` is never written. With `if-no-files-found: warn`
+      # the step found an empty directory every month and passed. Measured on
+      # the 2026-08-08 refit: zero artifacts uploaded, job green.
+      #
+      # A step that verifies nothing is worse than no step, because the job
+      # looks like it checks its own output. This one reads each engine's
+      # parameters back from wherever they were actually stored and fails if the
+      # version, the fit date or the byte-stability guarantee is not what the
+      # run just wrote.
+      - name: Verify fitted parameters were stored
         if: ${{ !inputs.dry_run }}
-        uses: actions/upload-artifact@v5
-        with:
-          name: engine-parameters
-          path: compute/artifacts/
-          if-no-files-found: warn
-          retention-days: 400
+        env:
+          FINDYN_ADMIN_URL: ${{ secrets.FINDYN_ADMIN_URL }}
+          ADMIN_HMAC_SECRET: ${{ secrets.ADMIN_HMAC_SECRET }}
+        run: python -m jobs.verify_artifacts -v

@@ -174,6 +174,36 @@ def score_factor(
         if not level.empty and math.isfinite(float(level.iloc[-1])):
             components[f"{series_spec.id}:level"] = float(level.iloc[-1])
 
+    # How many of the configured inputs the score is actually a mean over.
+    #
+    # A factor is the average of its inputs, so losing one does not fail it — it
+    # silently rescopes it. `earnings` is Shiller real EPS *and* BEA corporate
+    # profits; with no BEA_API_KEY set, production published 91.9/100 from one
+    # series, and a reader had no way to tell that half the definition was
+    # absent. The score looked exactly as confident as a complete one.
+    #
+    # So the count travels with it. Named `inputs_used`/`inputs_configured`
+    # rather than a boolean because "3 of 4" and "1 of 4" are different degrees
+    # of the same problem, and because a consumer can compare them without
+    # knowing what the factor is made of. This is the same rule the RII follows
+    # for its own components (`rii_components_missing`) and `p_shock` follows for
+    # an unfitted tail: nothing is silently dropped and nothing is silently
+    # trusted.
+    missing = tuple(
+        series_spec.id for series_spec in spec.series if series_spec.id not in contributions
+    )
+    components["inputs_used"] = float(len(contributions))
+    components["inputs_configured"] = float(len(spec.series))
+    if missing:
+        log.warning(
+            "factor %s scored on %d of %d configured inputs as of %s; missing %s",
+            spec.name,
+            len(contributions),
+            len(spec.series),
+            as_of,
+            ", ".join(missing),
+        )
+
     return FactorState(
         name=spec.name,
         as_of=as_of,

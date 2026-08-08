@@ -113,11 +113,15 @@ def baseline_window(
 ) -> tuple[int, bool]:
     """Minimum periods the expanding z-score waits for, and whether it is short.
 
-    Ten years of the publication series is the whole publication series —
-    ``FRED:SP500`` is licence-capped at roughly that — so demanding a full decade
-    would produce a column of NaN and a dashboard lamp that never lights. The
-    baseline therefore degrades to half the available history, floored at
-    :data:`MIN_Z_YEARS`, and says that it did so.
+    §8.3's full decade is available on the shipped configuration — the
+    publication path is the daily record spliced back to 1927, so this returns
+    ``(2520, False)`` and the lamp is scored against ten years as specified.
+
+    The degradation is kept for the configuration that loses the backfill, where
+    the publication path returns to the ten years ``FRED:SP500`` licences in
+    total. Demanding a full decade of *that* would produce a column of NaN and a
+    dashboard lamp that never lights, so the baseline falls to half the available
+    history, floored at :data:`MIN_Z_YEARS`, and says that it did so.
     """
     wanted = int(round(min_years * periods_per_year))
     if observations >= wanted:

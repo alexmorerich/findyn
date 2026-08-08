@@ -34,6 +34,12 @@ factors:
     weight: 1.0
     series:
       - {id: "SHILLER:REAL_EPS", provider: shiller, frequency: monthly, publication_lag_days: 30, direction: 1}
+      # NEEDS BEA_API_KEY. Unset in production as of 2026-08-08, so this factor
+      # publishes from Shiller alone — one of its two inputs, at a score that
+      # looks exactly as confident as a complete one. The count now travels with
+      # it (`inputs_used` / `inputs_configured` in the published components), so
+      # the gap is visible rather than inferred; setting the key is what closes
+      # it. Free from https://apps.bea.gov/API/signup/.
       - {id: "BEA:CORPORATE_PROFITS", provider: bea, frequency: quarterly, publication_lag_days: 60, direction: 1}
 
   liquidity:

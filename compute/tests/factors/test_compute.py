@@ -246,3 +246,56 @@ class TestComputeFactors:
         # higher breakeven (lower real rate) is support.
         assert directions["FRED:DGS10"] == -1
         assert directions["FRED:T10YIE"] == 1
+
+
+def test_a_factor_says_how_many_inputs_it_was_scored_on() -> None:
+    """A factor is a mean over its inputs, so losing one rescopes it silently.
+
+    `earnings` is Shiller real EPS *and* BEA corporate profits. With no
+    BEA_API_KEY set, production published 91.9/100 from one series and nothing
+    in the output said so — the score looked exactly as confident as a complete
+    one. The count travels with it now, on the same rule the RII follows for its
+    own components: nothing silently dropped, nothing silently trusted.
+    """
+    import pandas as pd
+
+    from findynamics.core.config import FactorSpec, SeriesSpec
+    from findynamics.factors.compute import score_factor
+
+    dates = pd.date_range("2024-01-01", periods=60, freq="D")
+    spec = FactorSpec(
+        name="earnings",
+        weight=1.0,
+        series=(
+            SeriesSpec(
+                id="A:PRESENT",
+                provider="fred",
+                frequency="daily",
+                publication_lag_days=1,
+                direction=1,
+            ),
+            SeriesSpec(
+                id="B:ABSENT",
+                provider="bea",
+                frequency="daily",
+                publication_lag_days=1,
+                direction=1,
+            ),
+        ),
+    )
+
+    # Only the first series made it into the information set.
+    frame = pd.DataFrame({"A:PRESENT": range(60)}, index=dates)
+    state = score_factor(spec, frame, dates[-1].date())
+
+    assert state is not None
+    assert state.components["inputs_used"] == 1.0
+    assert state.components["inputs_configured"] == 2.0
+
+    # And a complete one reports parity rather than omitting the fields, so a
+    # consumer never has to distinguish "absent" from "fine".
+    both = pd.DataFrame({"A:PRESENT": range(60), "B:ABSENT": range(60)}, index=dates)
+    complete = score_factor(spec, both, dates[-1].date())
+    assert complete is not None
+    assert complete.components["inputs_used"] == 2.0
+    assert complete.components["inputs_configured"] == 2.0
