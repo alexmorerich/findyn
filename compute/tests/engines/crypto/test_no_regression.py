@@ -136,7 +136,19 @@ class TestTheExistingFactorsAreUntouched:
         # Both legs and nothing else. The scoring pipeline carries each series
         # twice — its contribution and its `:level` — so the check is on the
         # series ids the trace mentions, not on the raw key set.
-        mentioned = {key.removesuffix(":level") for key in factors["global_liquidity"].components}
+        #
+        # `components` also carries factor-level scoring metadata that is not a
+        # series at all (`inputs_used` / `inputs_configured`, which say how many
+        # of the configured inputs the score is a mean over). Series ids are
+        # namespaced `PROVIDER:SERIES`, so the colon is what separates the two
+        # kinds of key; without this filter the metadata reads as two phantom
+        # series and the assertion below fails for a reason that has nothing to
+        # do with which series were scored.
+        mentioned = {
+            key.removesuffix(":level")
+            for key in factors["global_liquidity"].components
+            if ":" in key
+        }
         assert mentioned == {"FRED:M2SL", "FRED:WALCL"}
 
 
