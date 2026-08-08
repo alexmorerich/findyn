@@ -58,8 +58,26 @@ import { DEFAULT_RANGE, RANGES, fromDate, rangeFromUrl, writeRangeToUrl, type Ra
 
 const ASSET = 'equity';
 const DEEP_SERIES = 'SHILLER:NOMINAL_PRICE';
-/** The daily S&P record, 1927+. Same index as the publication series. */
-const DAILY_DEEP_SERIES = 'YAHOO:^GSPC';
+/**
+ * The daily S&P record as ingested — the same index the engine publishes against.
+ *
+ * The engine filters this record spliced behind `FRED:SP500`, so once a
+ * full-history run has happened its own metrics cover the same span and this is
+ * redundant. Until then it is the only place the century exists, and the page
+ * falls back to it rather than drawing ten years as though that were all there
+ * is. See {@link readCoverage}.
+ */
+const DAILY_RECORD_SERIES = 'YAHOO:^GSPC';
+
+/**
+ * How far the engine's published record may fall short of the ingested one
+ * before the page stops treating it as the whole history.
+ *
+ * Not zero: the engine legitimately starts a little later than the raw record
+ * because the Kalman filter's diffuse start-up is discarded and the trailing
+ * windows have to fill. Six weeks absorbs that without absorbing a decade.
+ */
+const COVERAGE_TOLERANCE_DAYS = 45;
 
 /** §3.1 thresholds, mirroring features/kinematics.py. */
 const JERK_ELEVATED = 2.0;
@@ -416,6 +434,96 @@ function percent(value: number | undefined, digits = 2): string {
   return `${(value * 100).toFixed(digits)}%`;
 }
 
+// --------------------------------------------------------------- coverage
+
+/**
+ * What the engine has actually published, against what has actually been
+ * ingested.
+ *
+ * These are two different things and the page used to assume they were one. The
+ * engine's kinematics run over the daily S&P record back to 1927, but they only
+ * *reach* D1 when a `--full-history` run publishes them; a nightly run
+ * republishes five years. Between a deploy and that backfill, asking the engine
+ * for "everything" returns whatever the last run happened to write — which is a
+ * well-formed response, with a real `available` count, that silently describes a
+ * decade as though it were the whole record.
+ *
+ * So the page measures the gap instead of assuming there is none. Nothing here
+ * is a workaround for a slow backfill: `engineFrom` and `recordFrom` are facts a
+ * chart of a century has to know regardless, because they are what distinguishes
+ * "the market began in 2016" from "we have not published that far back yet".
+ */
+interface Coverage {
+  /** Oldest date the engine has published `price_close` for, over all time. */
+  engineFrom: string | null;
+  /** Rows of `price_close` the engine has published, over all time. */
+  engineRows: number;
+  /** Oldest date the observation store holds for the same index. */
+  recordFrom: string | null;
+  recordRows: number;
+  /** The engine's published record is materially shorter than the ingested one. */
+  short: boolean;
+}
+
+function daysBetween(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000);
+}
+
+/**
+ * Two single-row probes: what the engine published, and what was ingested.
+ *
+ * `limit=1` on both, so each response is one observation plus the counts —
+ * a few hundred bytes to answer a question that decides which source the page
+ * draws from. Asking for the full record up front and discarding it would cost
+ * the reader a megabyte on every load once the backfill has run.
+ */
+async function readCoverage(): Promise<Coverage> {
+  const [engine, record] = await Promise.all([
+    getAssetHistory(ASSET, 'price_close', { limit: 1 }),
+    getSeries(DAILY_RECORD_SERIES, { limit: 1 }),
+  ]);
+
+  const engineFrom = engine.ok ? (engine.envelope.data.points[0]?.as_of ?? null) : null;
+  const engineRows = engine.ok ? engine.envelope.data.available : 0;
+
+  const detail = record.ok ? record.envelope.data : null;
+  // `first_observation` is the metadata's own claim; the oldest returned row is
+  // the same fact read from the data. Prefer the metadata, fall back to the row,
+  // because an ingest that has not refreshed metadata still has real rows.
+  const recordFrom =
+    detail?.metadata.first_observation ?? detail?.observations[0]?.obs_date ?? null;
+  const recordRows = detail?.available ?? 0;
+
+  const short =
+    recordFrom !== null &&
+    (engineFrom === null || daysBetween(recordFrom, engineFrom) > COVERAGE_TOLERANCE_DAYS);
+
+  return { engineFrom, engineRows, recordFrom, recordRows, short };
+}
+
+/** True when the requested window reaches back past what the engine published. */
+function reachesPastEngine(coverage: Coverage, range: RangeSpec): boolean {
+  if (!coverage.short) return false;
+  if (coverage.engineFrom === null) return true;
+  const from = fromDate(range);
+  // `undefined` is the Max range: it asks for everything, so it always reaches.
+  return from === undefined || from < coverage.engineFrom;
+}
+
+/**
+ * The notice a panel shows when it is drawing less than the record holds.
+ *
+ * Stated in both directions — what exists, and what is drawn — because the whole
+ * failure being prevented is a reader inferring the span from the axis labels.
+ */
+function shortfallNotice(coverage: Coverage, what: string): HTMLElement {
+  const detail =
+    coverage.engineFrom === null
+      ? `The engine has published no ${what} at all, while the observation store holds ${formatCount(coverage.recordRows)} daily closes from ${formatDate(coverage.recordFrom ?? '')}. Run the monthly refit, then \`jobs.daily --full-history\`.`
+      : `The engine has published ${what} from ${formatDate(coverage.engineFrom)} — ${formatCount(coverage.engineRows)} dates — while the observation store holds ${formatCount(coverage.recordRows)} daily closes from ${formatDate(coverage.recordFrom ?? '')}. This is a backfill that has not run, not the start of the market: the nightly job republishes a five-year window, and the full record reaches D1 only from \`jobs.daily --full-history\`.`;
+  return stateBlock({ tone: 'warn', title: `Historical publication incomplete`, detail });
+}
+
 /** Truncation and decimation, stated rather than left to be inferred. */
 function coverageNote(history: {
   count: number;
@@ -561,6 +669,8 @@ function renderState(result: ApiResult<TwoLayerState>): TwoLayerState | null {
 function renderRegime(
   history: ApiResult<RegimeHistory>,
   state: ApiResult<AssetState>,
+  coverage: Coverage,
+  range: RangeSpec,
 ): void {
   if (!hosts.regime) return;
 
@@ -608,7 +718,14 @@ function renderRegime(
     ),
   );
 
-  replace(hosts.regime, badgeRow, regimeChart(data.points), legend, coverageNote(data));
+  replace(
+    hosts.regime,
+    reachesPastEngine(coverage, range) ? shortfallNotice(coverage, 'a regime posterior') : null,
+    badgeRow,
+    regimeChart(data.points),
+    legend,
+    coverageNote(data),
+  );
 
   // The current posterior as a table, since a stacked area is hard to read
   // precisely at the right-hand edge — which is the part people care about.
@@ -1171,52 +1288,97 @@ function fanChart(bands: ForecastResponse['horizons'], label: string): SVGSVGEle
   return svg;
 }
 
+/** `macro_series` observations in the shape the charts take. */
+function asPoints(observations: SeriesDetail['observations']): HistoryPoint[] {
+  return observations.map((o) => ({
+    as_of: o.obs_date,
+    value: o.value,
+    meta: null,
+    written_at: null,
+  }));
+}
+
 function renderPrice(
   close: ApiResult<AssetHistory>,
   filtered: ApiResult<AssetHistory>,
-  deep: ApiResult<SeriesDetail> | null,
+  shiller: ApiResult<SeriesDetail> | null,
+  record: ApiResult<SeriesDetail> | null,
+  coverage: Coverage,
   range: RangeSpec,
 ): void {
   if (!hosts.price) return;
 
-  // Deep daily and monthly both read `macro_series` directly: the engine's own
-  // price metric is the publication series, which FRED caps at ten years.
-  if (range.deep || range.monthly) {
-    if (!deep || !deep.ok) {
-      const failure = deep && !deep.ok ? deep : { kind: 'unreachable', message: 'not requested' };
+  // The 1871 tier reads `macro_series` because it is a *monthly* series — a
+  // different quantity, not a wider window — and it would do so however much
+  // history the engine had published.
+  if (range.monthly) {
+    if (!shiller || !shiller.ok) {
+      const failure = shiller && !shiller.ok
+        ? shiller
+        : { kind: 'unreachable', message: 'not requested' };
       replace(hosts.price, failureBlock(failure, 'Shiller monthly history'));
       return;
     }
-    const body = deep.envelope.data;
-    const points: HistoryPoint[] = body.observations.map((o) => ({
-      as_of: o.obs_date,
-      value: o.value,
-      meta: null,
-      written_at: null,
-    }));
+    const body = shiller.envelope.data;
+    const points = asPoints(body.observations);
 
     replace(
       hosts.price,
-      range.monthly
-        ? stateBlock({
-            tone: 'info',
-            title: 'Monthly resolution — a different series, not a wider window',
-            detail: `${DEEP_SERIES}: month-end closes of the S&P composite from 1871. The daily record begins in 1927; everything before that exists only at this resolution.`,
-          })
-        : stateBlock({
-            tone: 'info',
-            title: 'Read straight from the observation store',
-            detail: `${DAILY_DEEP_SERIES}: daily closes of the same index the engine publishes against. The engine's own price metric comes from FRED:SP500, which is licence-capped to a rolling ten years — so past that, this is the record. The filtered overlay is not drawn here, because the model runs on the publication series and a line that was never computed should not appear.`,
-          }),
+      stateBlock({
+        tone: 'info',
+        title: 'Monthly resolution — a different series, not a wider window',
+        detail: `${DEEP_SERIES}: month-end closes of the S&P composite from 1871. The daily record begins in 1927; everything before that exists only at this resolution. No filtered overlay is drawn, because the model runs on the daily path and a line that was never computed should not appear.`,
+      }),
       lineChart([{ points, className: 'line' }], {
-        label: range.monthly
-          ? 'Shiller S&P composite, monthly, from 1871'
-          : `S&P 500 daily closes, ${range.label}`,
-        caption: range.monthly ? 'index points, month-end' : 'index points, daily close',
+        label: 'Shiller S&P composite, monthly, from 1871',
+        caption: 'index points, month-end',
         log: range.log,
       }),
       coverageNote({
         count: points.length,
+        available: body.available,
+        truncated: body.truncated,
+        decimated: body.decimated,
+      }),
+    );
+    return;
+  }
+
+  // The window reaches back past what the engine has published, and the same
+  // index is sitting in the observation store in full. Draw the record rather
+  // than a truncated version of the engine's view of it — and say which one this
+  // is, because they are not the same series of numbers.
+  //
+  // No filtered overlay here: the model never ran on these dates, and drawing a
+  // line that was never computed is the one thing worse than a short chart.
+  if (reachesPastEngine(coverage, range)) {
+    if (!record || !record.ok) {
+      const failure =
+        record && !record.ok ? record : { kind: 'unreachable', message: 'not requested' };
+      replace(
+        hosts.price,
+        shortfallNotice(coverage, 'a price path'),
+        failureBlock(failure, `${DAILY_RECORD_SERIES} daily closes`),
+      );
+      return;
+    }
+
+    const body = record.envelope.data;
+    replace(
+      hosts.price,
+      shortfallNotice(coverage, 'a filtered price path'),
+      stateBlock({
+        tone: 'info',
+        title: 'Drawn from the observation store, not from the model',
+        detail: `${DAILY_RECORD_SERIES}: daily closes of the same index the engine publishes against, read straight out of \`macro_series\`. The filtered overlay is absent because the model has not published over this span — once the backfill runs, this panel returns to the engine's own path and both lines are drawn.`,
+      }),
+      lineChart([{ points: asPoints(body.observations), className: 'line' }], {
+        label: `S&P 500 daily closes, ${range.label}`,
+        caption: 'index points, daily close',
+        log: range.log,
+      }),
+      coverageNote({
+        count: body.observations.length,
         available: body.available,
         truncated: body.truncated,
         decimated: body.decimated,
@@ -1275,6 +1437,7 @@ function renderPrice(
 function renderKinematics(
   velocity: ApiResult<AssetHistory>,
   acceleration: ApiResult<AssetHistory>,
+  coverage: Coverage,
   range: RangeSpec,
 ): void {
   if (!hosts.kinematics) return;
@@ -1300,8 +1463,12 @@ function renderKinematics(
     return;
   }
 
+  // No fallback exists here and none should be invented: velocity is a *state
+  // estimate*, and there is no second source for one. Where the price panel can
+  // fall back to the observation store, this panel can only say what it has.
   replace(
     hosts.kinematics,
+    reachesPastEngine(coverage, range) ? shortfallNotice(coverage, 'trend states') : null,
     lineChart([{ points: v.points, className: 'line' }], {
       label: 'Annualized velocity of the filtered trend',
       caption: 'velocity — annualized log drift',
@@ -1319,7 +1486,11 @@ function renderKinematics(
   );
 }
 
-function renderJerk(result: ApiResult<AssetHistory>, range: RangeSpec): void {
+function renderJerk(
+  result: ApiResult<AssetHistory>,
+  coverage: Coverage,
+  range: RangeSpec,
+): void {
   if (!hosts.jerk) return;
   if (range.monthly) {
     replace(
@@ -1349,6 +1520,7 @@ function renderJerk(result: ApiResult<AssetHistory>, range: RangeSpec): void {
 
   replace(
     hosts.jerk,
+    reachesPastEngine(coverage, range) ? shortfallNotice(coverage, 'a jerk z-score') : null,
     el(
       'div',
       { class: 'badgerow' },
@@ -1433,23 +1605,28 @@ function renderForces(result: ApiResult<ForceHistory>, snapshot: TwoLayerState |
   );
 }
 
-function renderProvenance(state: TwoLayerState | null, range: RangeSpec): void {
+function renderProvenance(
+  state: TwoLayerState | null,
+  coverage: Coverage,
+  range: RangeSpec,
+): void {
   if (!hosts.provenance) return;
 
   const version = state?.kinematics.model_version ?? null;
   const calibration = version?.split('+cal.')[1] ?? null;
   const isProxy = calibration !== null && !calibration.includes('gspc') && !calibration.includes('spx');
+  const split = reachesPastEngine(coverage, range);
 
   replace(
     hosts.provenance,
     el(
       'p',
       { class: 'prose' },
-      'Three price series feed this engine and they are not interchangeable. The ',
+      'Several price series feed this engine and they are not interchangeable. The ',
       el('strong', {}, 'publication'),
-      ' series is what the kinematics describe. A separate ',
+      ' path is what the kinematics describe: FRED:SP500 for every date it covers, spliced behind it the same index from YAHOO:^GSPC for the ninety years FRED does not licence. A separate ',
       el('strong', {}, 'calibration'),
-      ' series — longer, reaching back through the crises the publication series does not — is what the regime model is fitted on. A monthly ',
+      ' series is what the regime model is fitted on. A monthly ',
       el('strong', {}, 'deep-history'),
       ' series back to 1871 is the only basis for the tail estimates.',
     ),
@@ -1459,9 +1636,14 @@ function renderProvenance(state: TwoLayerState | null, range: RangeSpec): void {
       el('strong', {}, 'On screen now: '),
       range.monthly
         ? `${DEEP_SERIES} — month-end closes from 1871. Monthly, not daily.`
-        : range.deep
-          ? `${DAILY_DEEP_SERIES} daily closes for the price chart (${range.description}); the kinematics below remain FRED:SP500, which is where the model runs.`
-          : `FRED:SP500 for both the price chart and the kinematics, over ${range.description}.`,
+        : split
+          ? `${DAILY_RECORD_SERIES} daily closes for the price chart over ${range.description}, read from the observation store because the engine has not published that far back yet. The panels below show only what the engine has published, and say where that starts — they are not the same span as the chart above.`
+          : `the engine's own filtered path over ${range.description}. The chart and the velocity below are the same computation on the same dates, so the two cannot disagree about where the trend was.`,
+    ),
+    el(
+      'p',
+      { class: 'prose' },
+      'The two vendors are checked against each other before they are joined: they overlap by the whole ten years FRED covers, and the median relative gap across those dates is 2e-8. A pair that did not agree would not be spliced, and the model version would say so.',
     ),
     el(
       'p',
@@ -1499,7 +1681,12 @@ async function load(range: RangeSpec): Promise<void> {
   const history = (metric: string) =>
     getAssetHistory(ASSET, metric, { from, points: range.points });
 
+  // The coverage probe runs *beside* the panel requests rather than in front of
+  // them: it only decides which source the price panel draws from, so blocking
+  // the whole page on it would cost every reader a round trip to answer a
+  // question that is usually "the engine has everything".
   const [
+    coverage,
     state,
     twoLayer,
     regime,
@@ -1511,8 +1698,9 @@ async function load(range: RangeSpec): Promise<void> {
     acceleration,
     jerk,
     forces,
-    deep,
+    shiller,
   ] = await Promise.all([
+      readCoverage(),
       getAssetState(ASSET),
       getTwoLayerState(),
       getRegimeHistory({ asset: ASSET, from, points: Math.min(range.points, 1200) }),
@@ -1521,31 +1709,46 @@ async function load(range: RangeSpec): Promise<void> {
       // century of context, and the request would cost the reader a second or two.
       getInstability({ asset: ASSET, points: 400 }),
       getForecast({ asset: ASSET }),
-      range.deep || range.monthly ? Promise.resolve(null) : history('price_close'),
-      range.deep || range.monthly ? Promise.resolve(null) : history('price_filtered'),
+      range.monthly ? Promise.resolve(null) : history('price_close'),
+      range.monthly ? Promise.resolve(null) : history('price_filtered'),
       range.monthly ? Promise.resolve(null) : history('velocity'),
       range.monthly ? Promise.resolve(null) : history('acceleration'),
       range.monthly ? Promise.resolve(null) : history('jerk_z'),
       getForces({ limit: 200 }),
-      range.monthly
-        ? getSeries(DEEP_SERIES, { points: range.points })
-        : range.deep
-          ? getSeries(DAILY_DEEP_SERIES, { from, points: range.points })
-          : Promise.resolve(null),
+      range.monthly ? getSeries(DEEP_SERIES, { points: range.points }) : Promise.resolve(null),
     ]);
 
+  // Only fetched when the engine has not published this far back — one extra
+  // request in the degraded case, none in the healthy one.
+  const record =
+    !range.monthly && reachesPastEngine(coverage, range)
+      ? await getSeries(DAILY_RECORD_SERIES, { from, points: range.points })
+      : null;
+
   const snapshot = renderState(twoLayer);
-  renderRegime(regime, state);
+  renderRegime(regime, state, coverage, range);
   renderTransitions(state);
   renderInstability(instability, state);
   renderCrash(state);
   renderForecast(forecast);
   renderImplication(state, instability);
-  renderPrice(close ?? regimePlaceholder(), filtered ?? regimePlaceholder(), deep, range);
-  renderKinematics(velocity ?? regimePlaceholder(), acceleration ?? regimePlaceholder(), range);
-  renderJerk(jerk ?? regimePlaceholder(), range);
+  renderPrice(
+    close ?? regimePlaceholder(),
+    filtered ?? regimePlaceholder(),
+    shiller,
+    record,
+    coverage,
+    range,
+  );
+  renderKinematics(
+    velocity ?? regimePlaceholder(),
+    acceleration ?? regimePlaceholder(),
+    coverage,
+    range,
+  );
+  renderJerk(jerk ?? regimePlaceholder(), coverage, range);
   renderForces(forces, snapshot);
-  renderProvenance(snapshot, range);
+  renderProvenance(snapshot, coverage, range);
 }
 
 /** Stand-in for the daily series when the monthly tier is selected. */

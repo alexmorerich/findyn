@@ -18,9 +18,18 @@
  * rather than a wider window: Shiller is monthly, and drawing month-ends on the
  * same axis as daily closes without saying so would imply a daily record that
  * does not exist.
+ *
+ * There used to be a fourth rule here — a `deep` flag marking the ranges that
+ * outran the publication series, on which the page abandoned the engine's own
+ * metrics and read `YAHOO:^GSPC` straight out of `macro_series` with no filtered
+ * overlay and a banner explaining the gap. The engine now runs its filter over
+ * that same record (`engines/equity/prices.py::publication_path`), so every
+ * daily range is served by the engine and the special case is gone. What it was
+ * protecting against is still real and is still handled: a chart must never
+ * imply a model output that was not computed.
  */
 
-export type RangeKey = '1y' | '5y' | '20y' | 'max' | 'monthly';
+export type RangeKey = '1y' | '5y' | '20y' | '50y' | 'max' | 'monthly';
 
 export interface RangeSpec {
   key: RangeKey;
@@ -33,18 +42,6 @@ export interface RangeSpec {
   log: boolean;
   /** True for the monthly Shiller tier, which is a different series entirely. */
   monthly: boolean;
-  /**
-   * True when the range outruns the publication series.
-   *
-   * `FRED:SP500` is licence-capped to a rolling ten years, so the engine's own
-   * `price_close` metric cannot reach past 2016 however much history is
-   * republished. Beyond that the chart reads the daily S&P record straight out
-   * of `macro_series` — same index, different vendor — and the provenance block
-   * says so. The filtered overlay is not drawn there, because the model only
-   * runs on the publication series and pretending otherwise would draw a line
-   * that was never computed.
-   */
-  deep: boolean;
   /** Shown in the provenance block, so the reader knows what they are seeing. */
   description: string;
 }
@@ -57,8 +54,7 @@ export const RANGES: readonly RangeSpec[] = [
     points: 400,
     log: false,
     monthly: false,
-    deep: false,
-    description: 'daily closes, last twelve months',
+    description: 'daily closes and filtered level, last twelve months',
   },
   {
     key: '5y',
@@ -67,8 +63,7 @@ export const RANGES: readonly RangeSpec[] = [
     points: 900,
     log: false,
     monthly: false,
-    deep: false,
-    description: 'daily closes, last five years',
+    description: 'daily closes and filtered level, last five years',
   },
   {
     key: '20y',
@@ -79,18 +74,29 @@ export const RANGES: readonly RangeSpec[] = [
     // but only just, and the 2008 drawdown reads as shallower than it was.
     log: true,
     monthly: false,
-    deep: true,
-    description: 'YAHOO:^GSPC daily closes, last twenty years, log scale',
+    description: 'daily closes and filtered level, last twenty years, log scale',
   },
   {
+    key: '50y',
+    label: '50Y',
+    years: 50,
+    points: 2000,
+    log: true,
+    monthly: false,
+    description: 'daily closes and filtered level, last fifty years, log scale',
+  },
+  {
+    // There is no separate 100Y button because there is no separate window: the
+    // daily record starts 1927-12-30, so "the last hundred years" and "all of
+    // it" are the same query, and two buttons issuing it would differ only in
+    // implying that one of them might return less.
     key: 'max',
-    label: 'Max',
+    label: 'Max (~99Y)',
     years: null,
     points: 2500,
     log: true,
     monthly: false,
-    deep: true,
-    description: 'YAHOO:^GSPC daily closes from 1927-12-30, log scale',
+    description: 'the whole daily record from 1927-12-30 — about ninety-nine years, log scale',
   },
   {
     key: 'monthly',
@@ -99,12 +105,20 @@ export const RANGES: readonly RangeSpec[] = [
     points: 2200,
     log: true,
     monthly: true,
-    deep: false,
     description: 'Shiller month-end composite from 1871, log scale — monthly, not daily',
   },
 ] as const;
 
-export const DEFAULT_RANGE: RangeKey = '5y';
+/**
+ * The whole record, not the last five years.
+ *
+ * The engine filters the daily S&P back to 1927-12-30, and a page that opens on
+ * a five-year window makes that invisible to anyone who does not think to click.
+ * The cost is bounded by the server-side windowing above: Max asks for 2,500
+ * points and receives 2,500 points, whether the record holds 24,761 rows or
+ * 2,500.
+ */
+export const DEFAULT_RANGE: RangeKey = 'max';
 
 export function rangeFor(key: string | null | undefined): RangeSpec {
   return RANGES.find((r) => r.key === key) ?? RANGES.find((r) => r.key === DEFAULT_RANGE)!;

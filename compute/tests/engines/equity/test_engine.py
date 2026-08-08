@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import math
 import re
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -57,9 +58,34 @@ def test_it_declares_the_instability_inputs_it_can_do_without(equity_engine):
     assert "ENGINE:money.short_rate" in required
 
 
-def test_the_model_version_names_the_calibration_series(equity_engine, equity_observations):
+def test_the_model_version_names_both_inputs(equity_engine, equity_observations):
+    """The fitted series *and* the filtered series, because both are choices.
+
+    ``cal.`` has always been there: a parameter fitted on the NASDAQ is not a
+    parameter fitted on the S&P. ``pub.`` is there for the same reason plus one
+    more — whether the backfill is spliced in front of the primary series is
+    decided partly by the data, so the same code can publish a decade or a
+    century. Sharing a version, the two would upsert over each other on every
+    date they have in common.
+    """
     analysis = equity_engine.analyze(world_from(equity_observations))
-    assert analysis.model_version == f"{MODEL_VERSION_BASE}+cal.yahoo_gspc"
+    assert analysis.model_version == (
+        f"{MODEL_VERSION_BASE}+pub.fred_sp500_yahoo_gspc+cal.yahoo_gspc"
+    )
+
+
+def test_an_unspliced_run_keeps_the_shorter_version_string(equity_engine, equity_observations):
+    """No ``pub.`` tag when nothing was spliced — the suffix marks a real choice.
+
+    Dropping the backfill is the configuration where the publication path is the
+    ten years FRED licences, and its version must stay distinguishable from the
+    century's rather than merely being a different string.
+    """
+    without_backfill = equity_observations[equity_observations["series_id"] != BACKFILL]
+    analysis = equity_engine.analyze(world_from(without_backfill))
+
+    assert analysis.publication.series.series_id == PRIMARY
+    assert analysis.model_version == f"{MODEL_VERSION_BASE}+cal.fred_nasdaq100"
 
 
 # --- predict: the deliberate refusal ---------------------------------------
@@ -123,14 +149,12 @@ def test_every_feature_row_carries_its_own_model_version(equity_engine, equity_o
     """It is part of the table's key, so it cannot come off the run envelope."""
     rows = equity_engine.derived_features(world_from(equity_observations))
     versions = {row.model_version for row in rows}
-    assert versions == {f"{MODEL_VERSION_BASE}+cal.yahoo_gspc"}
+    assert versions == {f"{MODEL_VERSION_BASE}+pub.fred_sp500_yahoo_gspc+cal.yahoo_gspc"}
 
 
 def test_published_rows_are_finite_and_within_the_history_window(
     equity_engine, equity_observations
 ):
-    import math
-
     world = world_from(equity_observations)
     rows = [*equity_engine.outputs(world), *equity_engine.derived_features(world)]
     assert all(math.isfinite(row.value) for row in rows)
@@ -138,6 +162,98 @@ def test_published_rows_are_finite_and_within_the_history_window(
     oldest = min(row.as_of for row in rows)
     newest = max(row.as_of for row in rows)
     assert (newest - oldest).days <= equity_engine.history_days + 5
+
+
+# --- the century --------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def full_history_outputs(config_module, equity_observations):
+    """Every ``engine_output`` row a ``--full-history`` run would publish.
+
+    Module-scoped: the run filters a century twice and the assertions below are
+    all about the same set of rows.
+    """
+    from findynamics.core.artifacts import ArtifactStore
+
+    engine = EquityEngine(config_module, ArtifactStore(directory=None))
+    engine.full_history = True
+    return engine.outputs(world_from(equity_observations))
+
+
+@pytest.fixture(scope="module")
+def config_module():
+    from findynamics.core.config import load_series_config
+
+    return load_series_config()
+
+
+def test_velocity_is_published_for_the_whole_daily_record(full_history_outputs):
+    """The acceptance criterion: a century of trend states, not a decade.
+
+    The counts are floors rather than equalities because the record grows by a
+    row a day and the ten-year FRED window slides. What they pin down is the
+    order of magnitude — 24,700 sessions since 1927 against the ~2,500 FRED
+    licences — so this cannot be satisfied by the publication series alone
+    however the calendar moves.
+    """
+    velocity = sorted(row.as_of for row in full_history_outputs if row.metric == "velocity")
+
+    assert len(velocity) > 20000
+    assert velocity[0] < date(1930, 1, 1)
+    assert velocity[-1] > date(2026, 1, 1)
+
+
+def test_acceleration_reaches_as_far_back_as_velocity(full_history_outputs):
+    """Both are the same state estimate read at two orders; a chart of one
+    against the other must not be comparing different spans."""
+    spans = {
+        metric: sorted(row.as_of for row in full_history_outputs if row.metric == metric)
+        for metric in ("velocity", "acceleration")
+    }
+    assert spans["acceleration"][0] - spans["velocity"][0] <= timedelta(days=5)
+    assert len(spans["acceleration"]) > 20000
+
+
+def test_the_early_high_volatility_years_do_not_blow_the_estimates_up(full_history_outputs):
+    """1929-32 is the stress case the extension exists to reach, and it is also
+    where a filter that had not settled would diverge.
+
+    The bounds are read as economics, not as tolerances. An annualized log drift
+    of ±1 is a trend of +172%/-63% a year sustained by the *filter*, which is not
+    a thing markets do — the 1929-32 collapse, the worst in the record, reaches
+    -0.34. Anything past 1 is the diffuse prior leaking through, which is exactly
+    what the burn-in exists to remove.
+    """
+    early = [
+        row
+        for row in full_history_outputs
+        if row.metric in {"velocity", "acceleration"} and row.as_of < date(1940, 1, 1)
+    ]
+    assert early, "no pre-1940 rows were published at all"
+
+    velocity = [row.value for row in early if row.metric == "velocity"]
+    acceleration = [row.value for row in early if row.metric == "acceleration"]
+
+    assert all(math.isfinite(v) for v in velocity)
+    assert max(abs(v) for v in velocity) < 1.0
+    # Acceleration is a difference of annualized rates scaled again by 252, so it
+    # is legitimately an order of magnitude larger; the start-up spike it is
+    # being checked against was 359.
+    assert max(abs(a) for a in acceleration) < 50.0
+
+
+def test_the_jerk_baseline_is_no_longer_short(equity_engine, equity_observations):
+    """§8.3 asks for a ten-year expanding baseline and used to be refused it.
+
+    The publication series held ten years in total, so the baseline degraded to
+    half of that and every published state carried `jerk_baseline_is_short`. With
+    the record spliced back to 1927 the spec's window is simply available.
+    """
+    analysis = equity_engine.analyze(world_from(equity_observations))
+    diagnostics = analysis.publication.diagnostics
+    assert diagnostics["jerk_baseline_is_short"] == 0.0
+    assert diagnostics["jerk_baseline_periods"] == 2520.0
 
 
 def test_the_jerk_lamp_travels_as_a_code_with_its_label(equity_engine, equity_observations):
@@ -167,8 +283,12 @@ def test_fit_freezes_parameters_for_every_resolved_role(
     equity_engine.fit(world_from(equity_observations))
     document = artifacts.load(ARTIFACT_NAME)
 
+    # The publication path is keyed on the *spliced* identity, not on the primary
+    # series: `d` and the Kalman variances were searched over a century of closes
+    # and applying them to the ten years FRED alone holds would impose the wrong
+    # memory. compute_features refuses that outright — the guard is the key.
     assert set(document["series"]) == {
-        "fred_sp500",
+        "fred_sp500_yahoo_gspc",
         "yahoo_gspc",
         "shiller_nominal_price",
     }

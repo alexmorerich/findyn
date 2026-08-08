@@ -221,3 +221,140 @@ def test_non_positive_closes_are_dropped_before_the_log(equity_observations, con
     roles = resolve_from(world.series, config)
     path = prices_mod.price_path(world.series, roles.publication)
     assert (path > 0).all()
+
+
+# --- the splice -------------------------------------------------------------
+
+
+def test_the_backfill_takes_the_extension_role(config):
+    """Same-index, same-frequency, so it can go in front of the publication series."""
+    roles = resolve(counts(**{PRIMARY: ENOUGH, BACKFILL: ENOUGH}), config)
+    assert roles.extension is not None
+    assert roles.extension.series_id == BACKFILL
+    assert roles.publication_input.series_id == f"{PRIMARY}+{BACKFILL}"
+
+
+def test_the_proxy_is_never_spliced_in(config):
+    """The failure this role separation exists for.
+
+    ``regime_proxy`` is admissible as a *fitting* series with a caveat attached,
+    and inadmissible as history for the published index under any caveat: a 1990
+    velocity taken from the NASDAQ, published under a label that says S&P, is not
+    something a footnote repairs.
+    """
+    roles = resolve(counts(**{PRIMARY: ENOUGH, REGIME_PROXY: 10 * ENOUGH}), config)
+    assert roles.extension is None
+    assert roles.publication_input.series_id == PRIMARY
+
+
+def test_a_half_finished_backfill_does_not_extend_the_record_either(config):
+    """The same threshold that governs calibration governs the splice.
+
+    Prepending forty rows of a partial ingest would move the start of the
+    published record — and therefore the filter's whole start-up — on the basis
+    of how far an unfinished job happened to get.
+    """
+    roles = resolve(counts(**{PRIMARY: ENOUGH, BACKFILL: 40}), config, min_observations=250)
+    assert roles.extension is None
+
+
+def test_the_spliced_path_is_the_union_of_both_records(equity_observations, config):
+    """The acceptance criterion: a century of closes under one identity."""
+    world = world_from(equity_observations)
+    roles = resolve_from(world.series, config)
+    path, series = prices_mod.publication_path(world.series, roles)
+
+    assert path.index[0].year == 1927
+    assert len(path) > 24000
+    assert series.series_id == f"{PRIMARY}+{BACKFILL}"
+    assert series.observations == len(path)
+    assert path.index.is_monotonic_increasing and not path.index.has_duplicates
+
+
+def test_the_primary_vendor_owns_every_date_it_covers(equity_observations, config):
+    """The splice may only *lengthen* the record, never restate it.
+
+    Both vendors carry the whole of 2016-2026. If the extension were allowed to
+    win a shared date, a figure already published from FRED would change vendor
+    retroactively — the same class of silent restatement the point-in-time layer
+    exists to prevent.
+    """
+    world = world_from(equity_observations)
+    roles = resolve_from(world.series, config)
+    path, _ = prices_mod.publication_path(world.series, roles)
+    primary = prices_mod.price_path(world.series, roles.publication)
+
+    shared = path.index.intersection(primary.index)
+    assert len(shared) == len(primary)
+    pd.testing.assert_series_equal(path.loc[shared], primary.loc[shared], check_names=False)
+
+
+def test_a_disagreeing_vendor_is_refused_rather_than_spliced(equity_observations, config, caplog):
+    """The guard, planted.
+
+    Two vendors' copies of one index agree to rounding. A series that does not is
+    something else — a different index, another currency, a rebasing — and
+    joining it on would publish one market's history under another's name. The
+    refusal falls back to the publication series alone, so the run still
+    publishes; what it must not do is publish quietly.
+    """
+    rescaled = equity_observations.copy()
+    backfill = rescaled["series_id"] == BACKFILL
+    rescaled.loc[backfill, "value"] = rescaled.loc[backfill, "value"] * 1.4
+
+    world = world_from(rescaled)
+    roles = resolve_from(world.series, config)
+    assert roles.extension is not None, "the role still resolves; only the join is refused"
+
+    with caplog.at_level("ERROR"):
+        path, series = prices_mod.publication_path(world.series, roles)
+
+    assert series.series_id == PRIMARY
+    assert path.index[0].year >= 2016
+    assert "refusing to splice" in caplog.text
+
+
+def test_records_that_never_overlap_cannot_be_checked_and_are_refused(config):
+    """No shared dates is a refusal, not a pass.
+
+    The agreement measurement is the only evidence that the two vendors carry the
+    same index. Where there is none, splicing would be an assertion about the
+    data taken purely from a role name in a yaml file.
+    """
+    early = pd.Series(
+        [10.0, 11.0, 12.0], index=pd.to_datetime(["1990-01-02", "1990-01-03", "1990-01-04"])
+    )
+    late = pd.Series(
+        [20.0, 21.0, 22.0], index=pd.to_datetime(["2020-01-02", "2020-01-03", "2020-01-06"])
+    )
+    overlap, disagreement = prices_mod.splice_disagreement(late, early)
+    assert overlap == 0
+    assert disagreement == float("inf")
+
+
+def test_a_monthly_backfill_is_not_spliced_onto_a_daily_series(config, caplog):
+    """Frequencies are not interchangeable: velocity is a rate per observation.
+
+    Joining a monthly record to a daily one would change what an observation
+    means partway through the series, and every annualized figure before the seam
+    would be wrong by a factor of twenty-one. Nothing in the role name says
+    otherwise, so the frequencies are compared rather than assumed.
+    """
+    with caplog.at_level("WARNING"):
+        roles = resolve(counts(**{PRIMARY: ENOUGH, BACKFILL: ENOUGH}), _monthly_backfill(config))
+
+    assert roles.extension is None
+    assert roles.publication_input.series_id == PRIMARY
+    assert "cannot be spliced" in caplog.text
+
+
+def _monthly_backfill(config):
+    """The shipped config with the backfill role re-declared as monthly."""
+    from dataclasses import replace as replace_field
+
+    engine = config.engines["equity"]
+    series = dict(engine.series)
+    series["backfill"] = replace_field(series["backfill"], frequency="monthly")
+    engines = dict(config.engines)
+    engines["equity"] = replace_field(engine, series=series)
+    return replace_field(config, engines=engines)

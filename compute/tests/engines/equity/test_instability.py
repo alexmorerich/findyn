@@ -259,6 +259,55 @@ def test_absent_fragility_inputs_assume_transmission_rather_than_safety() -> Non
     assert detail["transmission_inputs"] == 0.0
 
 
+def test_that_assumption_is_not_published_as_seventy_years_of_history() -> None:
+    """The snapshot fallback and the history are different questions.
+
+    1.0 is the right answer for *today* with a feed down: the factor multiplies
+    crash risk, so guessing 0 would silently zero the published number. Run down
+    a century it says something else entirely — the credit and liquidity series
+    start in the 1960s at the earliest, so every earlier date scores exactly 1.0
+    and the chart reads "a shock would transmit with certainty" for seventy
+    years, asserted purely from the absence of data.
+
+    The engine drops non-finite values, so blanking those dates means the factor
+    begins where it can be measured instead of beginning with an alarm.
+    """
+    dates = pd.date_range("2020-01-01", periods=40, freq="B")
+    belief = pd.DataFrame(
+        np.tile([0.05, 0.1, 0.15, 0.2, 0.5], (len(dates), 1)),
+        index=dates,
+        columns=list(STATES),
+    )
+    # Credit arrives halfway through, exactly as a real series does.
+    credit = pd.Series(4.0, index=dates[20:])
+
+    history = crash.crash_history(
+        belief,
+        transmat=sticky_transmat(),
+        adverse_states=ADVERSE_STATES,
+        periods_per_year=252.0,
+        horizon_months=12.0,
+        tail=tail_fit(),
+        rii=pd.Series(50.0, index=dates),
+        credit_spread=credit,
+    )
+
+    unmeasured = history["p_transmission"].iloc[:20]
+    measured = history["p_transmission"].iloc[20:]
+    assert unmeasured.isna().all(), "no fragility input is not a maximal reading"
+    assert measured.notna().all()
+    assert (measured <= 1.0).all()
+
+    # §4's "all three or none" has to hold per date, not just per run: the
+    # composite must vanish wherever one of its factors could not be measured.
+    assert history["crash_risk"].iloc[:20].isna().all()
+    assert history["crash_risk"].iloc[20:].notna().all()
+    # And the two factors that *are* measurable keep their whole span — blanking
+    # them too would discard real information to punish a missing third.
+    assert history["p_transition"].notna().all()
+    assert history["p_shock"].notna().all()
+
+
 def test_transition_probability_cannot_be_injected() -> None:
     """§4 + open issue #3c, enforced structurally.
 

@@ -83,7 +83,14 @@ log = logging.getLogger("findynamics.engines.equity")
 #: than overwritten because R2 refused the write — the 1.0.0 artifact produced a
 #: different `p_shock` on the same inputs, which makes it a different model, and
 #: every state stamped 1.0.0 is still a checkable claim about that one.
-MODEL_VERSION_BASE = "equity-1.1.0"
+#:
+#: 1.2.0: the publication feature path runs on the spliced daily S&P record back
+#: to 1927 rather than on the ten years FRED licences (prices.py), and the
+#: filter's diffuse start-up is discarded instead of published (kinematics.py).
+#: Both change the value of every kinematic feature on every date — the Kalman
+#: variances are re-estimated over a century, so even 2024's velocity moves — so
+#: it is a different model rather than a longer chart of the same one.
+MODEL_VERSION_BASE = "equity-1.2.0"
 
 #: Artifact document name under ``compute/artifacts/``.
 ARTIFACT_NAME = "equity"
@@ -92,11 +99,13 @@ ARTIFACT_NAME = "equity"
 #:
 #: Calibration is included because M4 needs it, not for the regime model — the
 #: fitted parameters come out of the artifact — but for the RII. Every RII
-#: component is an expanding percentile, and a percentile taken over the
-#: publication window alone is a percentile over eight years: measured that way
-#: the index separated the COVID crash from a calm 2021 by six points out of a
-#: hundred. Over the 1927+ path the same components have a century to rank
-#: against.
+#: component is an expanding percentile, and a percentile is only as meaningful
+#: as the sample it ranks against.
+#:
+#: It stayed in the daily set after the publication path was spliced back to 1927
+#: because the two coincide only in the *configured* case. Lose the backfill and
+#: publication returns to ten years while calibration falls to the NASDAQ proxy,
+#: which is precisely the case the RII needs a second path for.
 #:
 #: The cost is bounded by the frozen parameters: with ``d`` and the Kalman
 #: variances read from the refit, the calibration path is one filter pass rather
@@ -264,6 +273,12 @@ class EquityEngine(AssetEngine):
         1927. Charting the full record needs the second to have run once — and
         needs the first to stay short, or the cron writes a century every night
         to say nothing new.
+
+        ``backfill_history_days`` was written to reach 1927 before anything could
+        use it: the publication series held ten years, so a full-history run
+        republished ten years however far back the window pointed. Splicing the
+        backfill in front of it (``prices.publication_path``) is what makes the
+        long window mean what it says.
         """
         block = self._block("outputs")
         if self.full_history:
@@ -280,9 +295,25 @@ class EquityEngine(AssetEngine):
         configured = prices_mod.configured_roles(self._config)
         return tuple(sorted({spec.id for spec in configured.values()}))
 
-    def model_version(self, roles: PriceRoles) -> str:
-        """``equity-1.0.0+cal.fred_nasdaq100`` — the fit is part of the identity."""
-        return f"{MODEL_VERSION_BASE}+{roles.tag}"
+    def model_version(self, roles: PriceRoles, publication_input: PriceSeries) -> str:
+        """``equity-1.2.0+pub.fred_sp500_yahoo_gspc+cal.yahoo_gspc``.
+
+        Two inputs, two tags. The calibration series has always been named here
+        because a parameter fitted on the NASDAQ is not a parameter fitted on the
+        S&P. The publication input is named for the same reason and one more: it
+        is decided partly by the *data* — :func:`~.prices.publication_path`
+        declines the splice if the two vendors' records do not agree — so a run
+        that loses the backfill silently falls back to a decade. Under one
+        version those two histories would upsert over each other on the dates
+        they share and a reader could not tell which they were looking at.
+
+        ``pub.`` is omitted when nothing was spliced, so the unextended
+        configuration keeps the version string it already had a suffix for.
+        """
+        base = f"{MODEL_VERSION_BASE}+{roles.tag}"
+        if publication_input.series_id == roles.publication.series_id:
+            return base
+        return f"{MODEL_VERSION_BASE}+pub.{publication_input.slug}+{roles.tag}"
 
     # -- analysis ---------------------------------------------------------
 
@@ -319,12 +350,26 @@ class EquityEngine(AssetEngine):
         stored = self._stored_params()
         params = self.feature_params
 
-        features: dict[str, FeatureSet] = {}
+        # The publication path is assembled rather than read: the primary series
+        # covers ten years, the backfill role carries the same index back to
+        # 1927, and `publication_path` joins them under one identity — or
+        # declines to and says why. Everything downstream, including
+        # `model_version`, uses the series it hands back rather than the
+        # resolution's, so a declined splice cannot be published as a spliced one.
+        publication_input = resolved.publication
+        paths: dict[str, tuple[pd.Series, PriceSeries]] = {}
         for role in wanted:
+            if role == "publication":
+                path, publication_input = prices_mod.publication_path(world.series, resolved)
+                paths[role] = (path, publication_input)
+                continue
             series: PriceSeries | None = getattr(resolved, role)
             if series is None:
                 continue
-            path = prices_mod.price_path(world.series, series)
+            paths[role] = (prices_mod.price_path(world.series, series), series)
+
+        features: dict[str, FeatureSet] = {}
+        for role, (path, series) in paths.items():
             if path.empty:
                 log.warning("equity: %s (%s) has no knowable closes", role, series.series_id)
                 continue
@@ -352,7 +397,7 @@ class EquityEngine(AssetEngine):
         return EquityAnalysis(
             roles=resolved,
             features=features,
-            model_version=self.model_version(resolved),
+            model_version=self.model_version(resolved, publication_input),
             regime=regime,
             instability=(
                 self._instability_view(world, resolved, features, regime)
@@ -672,8 +717,37 @@ class EquityEngine(AssetEngine):
         business sharing one, and sub-milestone B fits its regime model on the
         calibration path — which needs its own frozen parameters or the fit and
         the daily inference would be looking at differently-built features.
+
+        **Refuses an incomplete information set**, which is the one place this
+        engine does not degrade. A daily run that loses a provider publishes what
+        it can and says so (§14.2); a refit that loses one would write an
+        immutable artifact, addressed by content, that is a different model from
+        the one the same month produces with the provider up — and `deep_history`
+        does it silently, because it feeds the `tail` block but not
+        ``model_version``, so the degraded fit lands on the *same* key and 409s
+        against its predecessor (issue #6). A refit is monthly and rerunnable;
+        waiting for the provider costs nothing worth having.
         """
         analysis = self.analyze(world, roles=ALL_ROLES)
+
+        if analysis.roles.unresolved:
+            raise StateUnavailable(
+                "equity: refusing to refit on an incomplete information set — "
+                f"{', '.join(analysis.roles.unresolved)} "
+                f"{'is' if len(analysis.roles.unresolved) == 1 else 'are'} configured "
+                "but unavailable in this run. A fit is immutable once stored, so a "
+                "run that quietly fits on fewer series than the last one cannot be "
+                "told apart from it. Re-run when the provider answers"
+            )
+
+        # The resolution says which roles were *available*; the publication
+        # feature set says what the filter was actually handed, which is the same
+        # thing only when the splice went through. Recording both is what lets a
+        # later reader tell a declined splice from an absent backfill.
+        roles = {
+            **analysis.roles.describe(),
+            "publication_input": analysis.publication.series.series_id,
+        }
 
         # No wall-clock timestamp. `as_of` below is the information set this fit
         # describes and is what the artifact is keyed on; a `fitted_at` recording
@@ -685,7 +759,7 @@ class EquityEngine(AssetEngine):
         document: dict[str, Any] = {
             "model_version": analysis.model_version,
             "as_of": world.as_of.isoformat(),
-            "roles": analysis.roles.describe(),
+            "roles": roles,
             "series": {
                 feature_set.series.slug: feature_set.frozen().as_dict()
                 for feature_set in analysis.features.values()

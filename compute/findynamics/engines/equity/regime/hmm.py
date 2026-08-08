@@ -43,6 +43,24 @@ Determinism is a requirement, not a nicety: the replay test recomputes fits, and
 an HMM that lands somewhere different each time would fail it for reasons that
 have nothing to do with lookahead. The seed is configuration and travels in the
 artifact.
+
+**The seed alone does not buy it.** ``GaussianHMM`` initializes its means with
+scikit-learn's k-means, which is parallelized with OpenMP, and a threaded
+floating-point reduction sums its partial results in whatever order the threads
+finish. That is a difference in the last bit or two of the initial means, which
+200 EM iterations then amplify — measurably, to a relative ~1e-9 in the stored
+parameters. Two refits of the same data under the same seed therefore produced
+*almost* the same model and not the same bytes, and since fitted artifacts are
+addressed by (model_version, fit date) and compared by content, "almost" is a
+409 (issue #6). Worse, it did not stop at the HMM: the transition classifiers are
+fitted on these posteriors, so a 1e-9 wobble moved a split threshold and
+re-serialized a 340 kB booster that differed from its predecessor.
+
+:func:`fit_hmm` therefore pins the thread pools to one thread for the duration of
+the fit. It is the cheapest of the available fixes and the only one that makes
+the fit genuinely reproducible rather than reproducible-to-a-tolerance — and it
+is measurably free here, because the design matrix is four columns wide and
+there was never any parallelism worth having in it.
 """
 
 from __future__ import annotations
@@ -55,6 +73,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from hmmlearn.hmm import GaussianHMM
+from threadpoolctl import threadpool_limits
 
 from findynamics.engines.equity.domain import REGIMES
 from findynamics.engines.equity.regime.design import RegimeDesign
@@ -352,10 +371,14 @@ def fit_hmm(
         init_params="stmc",
     )
 
-    with warnings.catch_warnings():
+    with warnings.catch_warnings(), threadpool_limits(limits=1):
         # Not converging in n_iter is reported below with the iteration count
         # attached; hmmlearn's own warning says only that it happened.
         warnings.simplefilter("ignore")
+        # One thread, for reproducibility rather than for thrift — see the module
+        # docstring. Scoped to the fit so that nothing else in the process pays
+        # for it, and covering `predict` too because the Viterbi path is what the
+        # state labels are read off and it reads the same parameters.
         model.fit(matrix)
         states = model.predict(matrix)
 
