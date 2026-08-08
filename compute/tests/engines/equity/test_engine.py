@@ -330,19 +330,24 @@ def test_the_artifact_carries_no_wall_clock_timestamp(
 def test_two_fits_on_one_information_set_agree_on_what_they_publish(
     config, artifacts, tmp_path, equity_observations
 ):
-    """The invariant worth holding: *semantic* equivalence, not byte equality.
+    """Two fits of one information set agree all the way to the dashboard.
 
-    Two fits of the same specification on the same information set differ in
-    their raw parameters — measured on the real snapshot, 128 float fields with a
-    maximum relative difference of 3.3e-08, because multithreaded BLAS does not
-    fix its reduction order. Every one of those differences is inert by the time
-    it reaches a consumer: the regime posteriors agree to 4.7e-10 across 24,364
-    dates, no date's label changes, and the published state is identical field
-    for field.
+    This once asserted *semantic* equivalence in place of byte equality, on the
+    grounds that the raw parameters legitimately differed — measured on this
+    snapshot at 128 float fields, maximum relative difference 3.3e-08 — while
+    everything a reader sees was identical anyway.
 
-    So this asserts what a reader of the dashboard would notice, which is
-    nothing. Byte equality is available too — pin the BLAS thread count — but it
-    is a stronger promise than the system needs and a slower one to keep.
+    That reasoning does not survive contact with the storage contract.
+    ``putArtifact`` compares **bytes**, so a difference no consumer would notice
+    is still a 409 that fails the monthly job, which is issue #6 exactly. The
+    cause is now fixed at its root rather than tolerated: the fit pins its thread
+    pools and is byte-reproducible, and ``test_reproducibility.py`` asserts that
+    directly. The measured cost of the pin was nothing, because the design matrix
+    is four columns wide.
+
+    So this test keeps its value but changes its job. It is the end-to-end half —
+    two *separately stored* artifacts, each read back through ``predict`` — which
+    byte equality of one document does not by itself establish.
     """
     from findynamics.core.artifacts import ArtifactStore
 
@@ -417,6 +422,29 @@ def test_the_refit_stores_the_tail_and_the_daily_run_inherits_it(
     # And the factor it feeds must actually vary, which is the symptom that
     # would have caught this: a constant p_shock is the fallback wearing a hat.
     assert view.crash["p_shock"].nunique() > 1
+
+
+def test_a_refit_refuses_an_incomplete_information_set(equity_engine, equity_observations):
+    """The one place this engine does not degrade (issue #6).
+
+    Dropping deep history is the dangerous case precisely because it is the quiet
+    one: it feeds the `tail` block but not ``model_version``, so the degraded fit
+    lands on the *same* artifact key as the healthy one and differs only in
+    content — which the store can report only as a 409, on the next run, against
+    a fit that is already immutable.
+
+    A daily run in the same situation must still publish, and the assertion below
+    is as much about that as about the refusal: §14.2 is unchanged, and only
+    ``fit`` is strict.
+    """
+    without_deep = equity_observations[equity_observations["series_id"] != DEEP_HISTORY]
+    world = world_from(without_deep)
+
+    with pytest.raises(StateUnavailable, match="deep_history"):
+        equity_engine.fit(world)
+
+    equity_engine._cache = None
+    assert equity_engine.analyze(world).publication.frame is not None
 
 
 def test_without_a_stored_tail_p_shock_says_it_is_a_fallback(equity_engine, equity_observations):
