@@ -1472,3 +1472,499 @@ a.enginecard__title {
   padding-left: 0.85rem;
   margin-top: 0.9rem;
 }
+
+/* ==================================================================
+   Equity Dynamics Lab
+   ==================================================================
+   A research terminal, so the visual rules are terminal rules: monospace
+   everywhere a number appears, one accent per quantity held constant across
+   panel, legend and tooltip, and chrome kept dark enough that the data is the
+   brightest thing on screen. Nothing here is decorative — every colour in this
+   block distinguishes one series or one state from another. */
+
+.panel--lab {
+  /* The chart is the widest thing on the page and the one element that should
+     not be squeezed by the panel's reading-width padding. */
+  padding-left: 0.9rem;
+  padding-right: 0.9rem;
+}
+
+/* A rule between the Lab and the rest of the engine surface. Not a panel: it
+   is a heading for the twelve panels that follow, and giving it a border would
+   make it look like a thirteenth. */
+.labdivider {
+  margin: 2.4rem 0 0.4rem;
+  padding-top: 1.4rem;
+  border-top: 1px solid var(--border);
+}
+.labdivider h2 {
+  font-size: 1.05rem;
+  margin: 0 0 0.35rem;
+  color: var(--fg-muted);
+  font-family: var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.labdivider p {
+  margin: 0;
+  max-width: 60rem;
+  color: var(--fg-muted);
+  font-size: 0.92rem;
+}
+
+/* ------------------------------------------------------------- toolbar */
+
+.labtoolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.1rem;
+  padding: 0.55rem 0.7rem;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.labtoggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.labtoggle:hover {
+  color: var(--fg);
+}
+.labtoggle__input {
+  accent-color: var(--accent);
+  width: 0.95rem;
+  height: 0.95rem;
+  cursor: pointer;
+}
+.labbutton {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  padding: 0.25rem 0.7rem;
+}
+.labtoolbar__hint {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  color: var(--fg-faint);
+  margin-left: auto;
+}
+
+/* --------------------------------------------------------------- stack */
+
+.labchart {
+  position: relative;
+}
+/* The panels butt directly against each other with no gap. That is the point:
+   a shared x-axis reads as shared when the panels look like one instrument,
+   and a 1rem gutter between them reads as four separate charts. */
+.labchart__stack {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-sunken);
+}
+.labpanel + .labpanel {
+  border-top: 1px solid var(--border);
+}
+.labpanel__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.4rem 0.7rem 0.15rem;
+  flex-wrap: wrap;
+}
+.labpanel__title {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg);
+  margin: 0;
+}
+.labpanel__note {
+  font-size: 0.74rem;
+  color: var(--fg-faint);
+}
+/* The live value under the crosshair, pinned right so it does not shift the
+   title when it appears and disappears. */
+.labpanel__readout {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--accent);
+  min-height: 1em;
+}
+.labpanel__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* Pointer events drive pan and zoom; the browser's own gestures would fight
+     them on a trackpad. */
+  touch-action: none;
+  cursor: crosshair;
+}
+.labpanel__svg.is-panning {
+  cursor: grabbing;
+}
+
+/* ---------------------------------------------------------- chart parts */
+
+.lab-grid__line {
+  stroke: #1a242f;
+  stroke-width: 1;
+}
+.lab-grid__line--v {
+  stroke: #161f29;
+}
+.lab-grid__zero {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+.lab-grid__band {
+  stroke: var(--warn);
+  stroke-width: 1;
+  stroke-dasharray: 3 5;
+  opacity: 0.45;
+}
+.lab-grid__label {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  fill: var(--fg-faint);
+}
+.lab-axis__line {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+
+/* The label an empty panel carries instead of a bare axis. */
+.lab-empty {
+  font-family: var(--mono);
+  font-size: 11px;
+  fill: var(--fg-faint);
+}
+
+.lab-line {
+  fill: none;
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+/* One hue per quantity, reused in the legend, the tooltip swatch and the
+   crosshair dot, so a colour means the same thing everywhere on the page. */
+.lab-line--raw {
+  stroke: #46586b;
+  stroke-width: 1;
+}
+.lab-line--price {
+  stroke: var(--accent);
+}
+.lab-line--velocity {
+  stroke: #7ee0a8;
+}
+.lab-line--acceleration {
+  stroke: #f0c05a;
+}
+.lab-line--jerk {
+  stroke: #c58cf0;
+}
+
+.lab-cursor__line {
+  stroke: var(--fg-muted);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  pointer-events: none;
+}
+.lab-cursor__dot {
+  fill: var(--bg);
+  stroke-width: 1.6;
+  pointer-events: none;
+}
+
+/* --------------------------------------------------------------- events */
+
+.lab-event__line {
+  stroke: var(--fg-faint);
+  stroke-width: 1;
+  stroke-dasharray: 1 4;
+  opacity: 0.75;
+}
+.lab-flag {
+  cursor: pointer;
+}
+.lab-flag__box {
+  fill: var(--bg-raised);
+  stroke: var(--border-strong);
+}
+.lab-flag:hover .lab-flag__box,
+.lab-flag:focus-visible .lab-flag__box {
+  fill: var(--bg-hover);
+  stroke: var(--accent);
+}
+.lab-flag__text {
+  font-family: var(--mono);
+  font-size: 9px;
+  fill: var(--fg-muted);
+  pointer-events: none;
+}
+.lab-flag:hover .lab-flag__text {
+  fill: var(--accent);
+}
+
+/* -------------------------------------------------------------- tooltip */
+
+.labtip {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  min-width: 12rem;
+  padding: 0.45rem 0.6rem;
+  background: rgba(8, 12, 17, 0.96);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.9);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+.labtip__date {
+  color: var(--fg);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.25rem;
+  margin-bottom: 0.3rem;
+  letter-spacing: 0.04em;
+}
+.labtip__row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  line-height: 1.55;
+}
+.labtip__swatch {
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  flex: none;
+}
+/* The swatch carries the same modifier as the path it stands for; the path
+   rule paints `stroke`, so the background is set here for the same class. */
+.labtip__swatch.lab-line--raw { background: #46586b; }
+.labtip__swatch.lab-line--price { background: var(--accent); }
+.labtip__swatch.lab-line--velocity { background: #7ee0a8; }
+.labtip__swatch.lab-line--acceleration { background: #f0c05a; }
+.labtip__swatch.lab-line--jerk { background: #c58cf0; }
+.labtip__label {
+  color: var(--fg-muted);
+}
+.labtip__value {
+  margin-left: auto;
+  color: var(--fg);
+}
+
+/* --------------------------------------------------------- regime block */
+
+.labtiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.6rem;
+}
+.labtile {
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  padding: 0.6rem 0.7rem;
+}
+.labtile--ok { border-left-color: var(--ok); }
+.labtile--warn { border-left-color: var(--warn); }
+.labtile--bad { border-left-color: var(--bad); }
+.labtile--info { border-left-color: var(--info); }
+.labtile--idle { border-left-color: var(--border-strong); }
+.labtile__label {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+.labtile__value {
+  font-family: var(--mono);
+  font-size: 1.15rem;
+  color: var(--fg);
+  margin: 0.15rem 0 0.25rem;
+}
+.labtile__detail {
+  font-size: 0.76rem;
+  color: var(--fg-muted);
+  line-height: 1.45;
+}
+
+.labribbon {
+  display: block;
+  width: 100%;
+  height: 26px;
+  margin-top: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+}
+/* The same five hues the posterior chart uses. Sharing them is the point: the
+   ribbon and the stacked area below are the same model output. */
+.labribbon__seg--bull_expansion { fill: #2f7f63; }
+.labribbon__seg--normal_expansion { fill: #3f6f8f; }
+.labribbon__seg--late_cycle { fill: #8a7433; }
+.labribbon__seg--bear { fill: #9a5236; }
+.labribbon__seg--crisis { fill: #8f3b3b; }
+
+.labkey {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  margin-top: 0.6rem;
+}
+.labkey__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  color: var(--fg-muted);
+}
+.labkey__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex: none;
+}
+.labkey__swatch--bull_expansion { background: #2f7f63; }
+.labkey__swatch--normal_expansion { background: #3f6f8f; }
+.labkey__swatch--late_cycle { background: #8a7433; }
+.labkey__swatch--bear { background: #9a5236; }
+.labkey__swatch--crisis { background: #8f3b3b; }
+
+/* ---------------------------------------------------------- event block */
+
+.labchips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.labchip {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  padding: 0.28rem 0.7rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-sunken);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.labchip:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.labchip--on {
+  color: var(--accent);
+  border-color: var(--border-strong);
+  background: var(--bg-raised);
+}
+
+.labevent {
+  margin-top: 0.85rem;
+  padding: 0.75rem 0.85rem;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.labevent__head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.labevent__title {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--fg);
+}
+.labevent__note {
+  margin: 0.35rem 0 0.7rem;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  max-width: 56rem;
+}
+.labmetrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 0.5rem;
+}
+.labmetric {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.45rem 0.55rem;
+}
+.labmetric__label {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+.labmetric__value {
+  font-family: var(--mono);
+  font-size: 1rem;
+  color: var(--fg);
+  margin: 0.15rem 0 0.1rem;
+}
+.labmetric__value--ok { color: var(--ok); }
+.labmetric__value--bad { color: var(--bad); }
+.labmetric__value--idle { color: var(--fg-faint); }
+.labmetric__detail {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--fg-faint);
+}
+
+/* A footnote under a chart or a block. Smaller than .prose and never carrying
+   an argument — it states what was drawn and where it came from. */
+.labnote {
+  margin: 0.65rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--fg-muted);
+  max-width: 62rem;
+}
+
+/* ------------------------------------------------------- custom range */
+
+.rangebar__custom {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: 0.3rem;
+}
+.rangebar__date {
+  font-size: 0.78rem;
+  padding: 0.25rem 0.4rem;
+  color-scheme: dark;
+}
+.rangebar__sep {
+  color: var(--fg-faint);
+  font-family: var(--mono);
+}
+
+@media (max-width: 46rem) {
+  .labtoolbar__hint {
+    margin-left: 0;
+  }
+  .labpanel__readout {
+    margin-left: 0;
+    width: 100%;
+  }
+}

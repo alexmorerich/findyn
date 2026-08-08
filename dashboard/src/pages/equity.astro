@@ -3,26 +3,96 @@ import Base from '../layouts/Base.astro';
 ---
 
 <Base
-  title="FinEquity"
-  description="Market kinematics for the S&P 500 — the Kalman-filtered price level, its velocity and acceleration, and the jerk instability indicator, from the FinDynamics equity engine."
-  eyebrow="Asset engine"
-  heading="FinEquity — market kinematics"
-  intro="Where the market is, how fast it is moving, whether that movement is strengthening or weakening, and which regime it is in. The daily record reaches back to 1927 and the monthly composite to 1871 — use the range control to see it. Everything on this page is read from the live API by your browser."
+  title="Equity Dynamics Lab"
+  description="A research terminal for S&P 500 market kinematics — the Kalman-filtered price level with its velocity, acceleration and jerk on four synchronized panels, plus the regime posterior, from the FinDynamics equity engine."
+  eyebrow="Asset engine · research terminal"
+  heading="Equity Dynamics Lab"
+  intro="Price and its first three derivatives on one time axis, back to 1927. Scroll to zoom, drag to pan, hover for a crosshair that reads all four panels at the same instant. Everything on this page is read from the live API by your browser — the Lab is a different view of those numbers, never a different source for them."
 >
   <section class="panel" aria-labelledby="range-h">
     <div class="panel__head">
-      <h2 id="range-h">Range</h2>
-      <span class="panel__note">?range= &middot; every chart moves together</span>
+      <h2 id="range-h">Time range</h2>
+      <span class="panel__note">?range= &middot; every panel moves together</span>
     </div>
     <p class="prose">
       Each range is a separate request for that window, not a filter over one big
       payload &mdash; and the server downsamples to a point count a screen can actually show,
-      preserving single-day crashes rather than sampling them away. Past twenty years the price
-      axis is logarithmic: the index goes from 17 to over 7,000, and on a linear axis the first
-      seventy years are a flat line on the floor.
+      preserving single-day crashes rather than sampling them away. <strong>Zoom is free:</strong>
+      once a range is loaded, zooming and panning re-read the points already in the browser and
+      issue no request at all. Past twenty years the price axis is logarithmic: the index goes from
+      17 to over 7,000, and on a linear axis the first seventy years are a flat line on the floor.
     </p>
     <div id="equity-range" style="margin-top:0.85rem"></div>
   </section>
+
+  <section class="panel panel--lab" aria-labelledby="lab-h">
+    <div class="panel__head">
+      <h2 id="lab-h">Kinematic panels</h2>
+      <span class="panel__note">price &middot; velocity &middot; acceleration &middot; jerk</span>
+    </div>
+    <p class="prose">
+      Four derivatives of one series, stacked rather than overlaid. They share an x-axis, a zoom,
+      a scroll position and a crosshair, so a feature at one instant sits at one x-coordinate in
+      all four at once &mdash; and they keep separate y-axes, because price runs to four figures
+      while velocity is a rate near zero and jerk is a z-score. Putting those on one axis would
+      flatten three of them onto the baseline.
+    </p>
+    <div id="lab-toolbar" style="margin-top:0.85rem"></div>
+    <div id="lab-chart" style="margin-top:0.75rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="lab-regime-h">
+    <div class="panel__head">
+      <h2 id="lab-regime-h">Regime summary</h2>
+      <span class="panel__note">/api/v1/regime &middot; /api/v1/assets/equity/state</span>
+    </div>
+    <p class="prose">
+      The engine&rsquo;s own five-state posterior, arranged as a state readout. The risk word is a
+      fixed lookup on the published label and the rule is printed below it &mdash; there is no
+      second regime model here, no re-thresholding, and nothing that could disagree with the
+      posterior panel further down the page.
+    </p>
+    <div id="lab-regime" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="lab-events-h">
+    <div class="panel__head">
+      <h2 id="lab-events-h">Historical events</h2>
+      <span class="panel__note">frontend annotation &middot; not model output</span>
+    </div>
+    <p class="prose">
+      Six fixed dates, drawn on the axis so the derivatives can be read against something a reader
+      already knows. Selecting one moves every panel to that event&rsquo;s window. The values
+      beside it are looked up out of the series already on screen at the nearest published date
+      &mdash; no interpolation, and no indicator that is not already published.
+    </p>
+    <div id="lab-events" style="margin-top:0.85rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="lab-debug-h">
+    <div class="panel__head">
+      <h2 id="lab-debug-h">Dynamics debug</h2>
+      <span class="panel__note">frontend diagnostics</span>
+    </div>
+    <p class="prose">
+      What the browser actually received, for anyone checking a reading against the API. It
+      separates what is <em>observed</em> from what is <em>exposed</em>: the date a series starts
+      on is in the response, while the burn-in, splice boundary and smoothing parameters that
+      produced that date are not returned by any endpoint and are reported as unavailable rather
+      than guessed at.
+    </p>
+    <div id="lab-debug" style="margin-top:0.85rem"></div>
+  </section>
+
+  <div class="labdivider">
+    <h2>Full engine surface</h2>
+    <p>
+      Everything the equity engine publishes, unchanged. The Lab above is a reading of the
+      kinematics; these panels are the rest of the state &mdash; the posterior as a distribution,
+      the calibrated transition probabilities, the instability index, the crash decomposition, the
+      forecast quantiles and the force layer.
+    </p>
+  </div>
 
   <section class="panel" aria-labelledby="k-h">
     <div class="panel__head">
