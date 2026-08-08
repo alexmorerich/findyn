@@ -50,30 +50,48 @@ from jobs._common import configure_logging
 log = logging.getLogger("findynamics.jobs.verify_artifacts")
 
 #: Keys whose presence would mean a wall clock is back in the stored document.
+#:
 #: Checked by name because that is how it got in the first time — a field added
-#: for debugging that nothing downstream read.
+#: for debugging that nothing downstream read. Deliberately excludes ``as_of``
+#: and ``fitted_as_of``: those are the *information set* the fit describes, which
+#: is derived from the calendar and is the same on every run of a month. It is
+#: the wall clock that cannot be, not the date.
 CLOCK_KEYS: tuple[str, ...] = ("fitted_at", "generated_at", "created_at", "timestamp")
+
+#: Field naming is per engine — equity writes ``as_of``, gold and rates write
+#: ``fitted_as_of``. Both mean the same thing and either satisfies the check;
+#: requiring one spelling would fail three engines for a naming difference.
+FIT_DATE_KEYS: tuple[str, ...] = ("as_of", "fitted_as_of")
 
 
 def check(name: str, document: dict[str, Any], *, as_of: str | None) -> list[str]:
-    """Problems with one stored artifact. Empty means it is usable."""
+    """Problems with one stored artifact. Empty means it is usable.
+
+    An empty document is **not** a problem: ``money`` fits nothing on purpose —
+    the numeraire is arithmetic on observed rates and the liquidity thresholds
+    are configuration — so it has no parameters to persist and never writes any.
+    Failing it here would make the step cry wolf every month, which is how a
+    check stops being read.
+    """
     problems: list[str] = []
 
     if not document:
-        return [f"{name}: nothing stored — the refit did not persist its parameters"]
+        log.info("%s: stores no fitted parameters, by design", name)
+        return problems
 
-    version = document.get("model_version")
-    if not version:
+    if not document.get("model_version"):
         problems.append(f"{name}: stored artifact carries no model_version")
 
-    stored_as_of = document.get("as_of")
-    if not stored_as_of:
-        problems.append(f"{name}: stored artifact carries no as_of; it has no address")
-    elif as_of is not None and stored_as_of != as_of:
+    stored = next((document[key] for key in FIT_DATE_KEYS if document.get(key)), None)
+    if not stored:
         problems.append(
-            f"{name}: stored as_of {stored_as_of!r} is not the run's cutoff {as_of!r}; "
-            "the artifact is addressed by (model_version, fit date), so this one is "
-            "filed under a date it does not describe"
+            f"{name}: stored artifact carries no fit date ({' or '.join(FIT_DATE_KEYS)}); "
+            "it is addressed by (model_version, fit date), so it has half an address"
+        )
+    elif as_of is not None and stored != as_of:
+        problems.append(
+            f"{name}: stored fit date {stored!r} is not the run's cutoff {as_of!r}; "
+            "the artifact is filed under a date it does not describe"
         )
 
     present = [key for key in CLOCK_KEYS if key in document]
@@ -112,13 +130,13 @@ def run(*, config_path: Path | None = None, as_of: str | None = None) -> int:
             failures.extend(problems)
             continue
 
-        log.info(
-            "%s: stored parameters read back — %s fitted through %s, %d series frozen",
-            name,
-            document.get("model_version"),
-            document.get("as_of"),
-            len(document.get("series") or {}),
-        )
+        if document:
+            log.info(
+                "%s: stored parameters read back — %s fitted through %s",
+                name,
+                document.get("model_version"),
+                next((document[k] for k in FIT_DATE_KEYS if document.get(k)), "?"),
+            )
 
     for failure in failures:
         log.error("%s", failure)
