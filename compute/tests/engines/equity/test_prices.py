@@ -149,6 +149,71 @@ def test_precedence_order_is_the_documented_one():
     assert CALIBRATION_PRECEDENCE == ("backfill", "regime_proxy")
 
 
+# --- what a refit is allowed to fit on (issue #6) ---------------------------
+
+
+def test_a_complete_information_set_reports_nothing_unresolved(config):
+    roles = resolve(
+        counts(**{PRIMARY: ENOUGH, BACKFILL: ENOUGH, DEEP_HISTORY: ENOUGH, REGIME_PROXY: ENOUGH}),
+        config,
+    )
+    assert roles.unresolved == ()
+
+
+def test_a_missing_deep_history_is_reported_as_unresolved(config):
+    """The case that made this necessary.
+
+    `deep_history` feeds the `tail` block but not `model_version`, so a refit
+    that lost it wrote a *different* artifact under the *same* key — which the
+    storage layer can only report as a 409 on the next run.
+    """
+    roles = resolve(counts(**{PRIMARY: ENOUGH, BACKFILL: ENOUGH, REGIME_PROXY: ENOUGH}), config)
+    assert roles.deep_history is None
+    assert roles.unresolved == ("deep_history",)
+
+
+def test_a_proxy_left_unused_by_precedence_is_not_missing(config):
+    """The false alarm this has to avoid.
+
+    `backfill` outranks `regime_proxy`, so in the shipped configuration the proxy
+    is never consulted. Reporting it as unresolved would fail every refit for a
+    series the fit does not use — the red pipeline for a non-event that issue #6
+    complains about, reintroduced from the other direction.
+    """
+    roles = resolve(counts(**{PRIMARY: ENOUGH, BACKFILL: ENOUGH, DEEP_HISTORY: ENOUGH}), config)
+    assert roles.calibration.source_role == "backfill"
+    assert roles.unresolved == ()
+
+
+def test_losing_every_calibration_candidate_reports_both(config):
+    """Precedence excuses a lower-ranked role only while something outranks it."""
+    roles = resolve(counts(**{PRIMARY: ENOUGH, DEEP_HISTORY: ENOUGH}), config)
+    assert set(roles.unresolved) == {"backfill", "regime_proxy"}
+
+
+def test_the_drivers_are_never_reported_as_unresolved(config):
+    """`engines.equity.series` configures more than price records.
+
+    `credit_spread`, `risk_free` and the rest feed the instability view, never
+    :func:`resolve` and never a fitted artifact. A refit that failed because NFCI
+    was briefly unavailable would be refusing to fit over a series it does not
+    fit on.
+    """
+    roles = resolve(
+        counts(**{PRIMARY: ENOUGH, BACKFILL: ENOUGH, DEEP_HISTORY: ENOUGH, REGIME_PROXY: ENOUGH}),
+        config,
+    )
+    configured = set(prices_mod.configured_roles(config))
+    assert {"credit_spread", "risk_free"} <= configured, "fixture assumes drivers are configured"
+    assert set(roles.unresolved) <= set(prices_mod.PRICE_ROLES)
+
+
+def test_the_shipped_snapshot_leaves_nothing_unresolved(equity_observations, config):
+    """The configuration a production refit actually runs on."""
+    roles = resolve_from(world_from(equity_observations).series, config)
+    assert roles.unresolved == ()
+
+
 # --- against the real snapshot ---------------------------------------------
 
 
