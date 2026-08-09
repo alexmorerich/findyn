@@ -54,7 +54,18 @@ import {
   table,
 } from '../lib/dom';
 import { formatCount, formatDate, formatValue, type Tone } from '../lib/format';
-import { DEFAULT_RANGE, RANGES, fromDate, rangeFromUrl, writeRangeToUrl, type RangeSpec } from './ranges';
+import { clearLab, labDataFrom, renderLab, setLabHosts } from './equity-lab';
+import {
+  DEFAULT_RANGE,
+  RANGES,
+  customRange,
+  defaultCustomWindow,
+  fromDate,
+  rangeFromUrl,
+  toDate,
+  writeRangeToUrl,
+  type RangeSpec,
+} from './ranges';
 
 const ASSET = 'equity';
 const DEEP_SERIES = 'SHILLER:NOMINAL_PRICE';
@@ -134,6 +145,14 @@ const hosts = {
   forces: host('forces'),
   provenance: host('provenance'),
 };
+
+setLabHosts({
+  toolbar: document.querySelector('#lab-toolbar'),
+  chart: document.querySelector('#lab-chart'),
+  regime: document.querySelector('#lab-regime'),
+  events: document.querySelector('#lab-events'),
+  debug: document.querySelector('#lab-debug'),
+});
 
 // ------------------------------------------------------------------ charts
 
@@ -557,29 +576,89 @@ function coverageNote(history: {
   );
 }
 
+/**
+ * The range bar, plus the custom window.
+ *
+ * The presets and Custom are the same control: picking Custom does not open a
+ * mode, it selects a range like any other, whose two dates happen to be typed
+ * rather than implied. That keeps one code path for loading — and keeps the
+ * custom window linkable, since it lands in the URL beside the preset key.
+ *
+ * **Built once, then updated in place.** The two date inputs hold state the
+ * reader is in the middle of editing: rebuilding the bar on every selection
+ * would replace the field they are typing into the moment the *other* field
+ * changes, which silently discards the second date of every custom window. So
+ * a re-render only re-marks which button is pressed.
+ */
+let rangeControl: { update: (range: RangeSpec) => void } | null = null;
+
 function renderRangeControl(current: RangeSpec, onSelect: (range: RangeSpec) => void): void {
   if (!hosts.range) return;
+  if (rangeControl) {
+    rangeControl.update(current);
+    return;
+  }
+
+  const initial = current.key === 'custom' && current.from && current.to
+    ? { from: current.from, to: current.to }
+    : defaultCustomWindow();
+
+  const from = el('input', {
+    type: 'date',
+    class: 'rangebar__date',
+    value: initial.from,
+    'aria-label': 'Custom range start',
+  }) as HTMLInputElement;
+  const to = el('input', {
+    type: 'date',
+    class: 'rangebar__date',
+    value: initial.to,
+    'aria-label': 'Custom range end',
+  }) as HTMLInputElement;
+
+  const apply = () => {
+    // A backwards or empty pair is left alone rather than swapped or guessed at:
+    // the reader is mid-edit, and reloading the page under them on a half-typed
+    // date is worse than waiting for the second one.
+    if (!from.value || !to.value || from.value >= to.value) return;
+    onSelect(customRange(from.value, to.value));
+  };
+  from.addEventListener('change', apply);
+  to.addEventListener('change', apply);
+
+  const buttons = new Map<string, HTMLElement>();
+  const button = (key: string, label: string, onClick: () => void): HTMLElement => {
+    const node = el('button', { type: 'button', class: 'rangebar__button' }, label);
+    node.addEventListener('click', onClick);
+    buttons.set(key, node);
+    return node;
+  };
+
+  const description = el('p', { class: 'enginecard__detail' }, current.description);
+
   replace(
     hosts.range,
     el(
       'div',
       { class: 'rangebar', role: 'group', 'aria-label': 'Chart range' },
-      ...RANGES.map((range) => {
-        const button = el(
-          'button',
-          {
-            type: 'button',
-            class: `rangebar__button${range.key === current.key ? ' rangebar__button--on' : ''}`,
-            'aria-pressed': range.key === current.key ? 'true' : 'false',
-          },
-          range.label,
-        );
-        button.addEventListener('click', () => onSelect(range));
-        return button;
-      }),
+      ...RANGES.map((range) => button(range.key, range.label, () => onSelect(range))),
+      button('custom', 'Custom', apply),
+      el('span', { class: 'rangebar__custom' }, from, el('span', { class: 'rangebar__sep' }, '→'), to),
     ),
-    el('p', { class: 'enginecard__detail' }, current.description),
+    description,
   );
+
+  const update = (range: RangeSpec) => {
+    for (const [key, node] of buttons) {
+      const on = key === range.key;
+      node.classList.toggle('rangebar__button--on', on);
+      node.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    description.textContent = range.description;
+  };
+
+  rangeControl = { update };
+  update(current);
 }
 
 function renderState(result: ApiResult<TwoLayerState>): TwoLayerState | null {
@@ -1672,14 +1751,29 @@ function renderProvenance(
 
 // ------------------------------------------------------------------- main
 
+/**
+ * Which load is the current one.
+ *
+ * A range change starts a fetch and does not wait for the one before it, so two
+ * can be in flight at once — and the slower one is not necessarily the older
+ * one. A wide window requested first can land *after* a narrow window requested
+ * second and repaint the page with data the range bar no longer claims. The
+ * counter makes a superseded load discard its own results instead.
+ */
+let generation = 0;
+
 async function load(range: RangeSpec): Promise<void> {
+  const mine = ++generation;
   for (const target of Object.values(hosts)) {
     if (target && target !== hosts.range) replace(target, loadingBlock(`FinEquity (${range.label})`));
   }
+  const labChart = document.querySelector('#lab-chart');
+  if (labChart) replace(labChart, loadingBlock(`the dynamics panels (${range.label})`));
 
   const from = fromDate(range);
+  const to = toDate(range);
   const history = (metric: string) =>
-    getAssetHistory(ASSET, metric, { from, points: range.points });
+    getAssetHistory(ASSET, metric, { from, to, points: range.points });
 
   // The coverage probe runs *beside* the panel requests rather than in front of
   // them: it only decides which source the price panel draws from, so blocking
@@ -1703,7 +1797,7 @@ async function load(range: RangeSpec): Promise<void> {
       readCoverage(),
       getAssetState(ASSET),
       getTwoLayerState(),
-      getRegimeHistory({ asset: ASSET, from, points: Math.min(range.points, 1200) }),
+      getRegimeHistory({ asset: ASSET, from, to, points: Math.min(range.points, 1200) }),
       // Fixed window, not the page range: the RII sparkline is a 90-day read and
       // the crash factors are a snapshot. Neither gets more meaningful with a
       // century of context, and the request would cost the reader a second or two.
@@ -1715,15 +1809,41 @@ async function load(range: RangeSpec): Promise<void> {
       range.monthly ? Promise.resolve(null) : history('acceleration'),
       range.monthly ? Promise.resolve(null) : history('jerk_z'),
       getForces({ limit: 200 }),
-      range.monthly ? getSeries(DEEP_SERIES, { points: range.points }) : Promise.resolve(null),
+      range.monthly ? getSeries(DEEP_SERIES, { to, points: range.points }) : Promise.resolve(null),
     ]);
 
   // Only fetched when the engine has not published this far back — one extra
   // request in the degraded case, none in the healthy one.
   const record =
     !range.monthly && reachesPastEngine(coverage, range)
-      ? await getSeries(DAILY_RECORD_SERIES, { from, points: range.points })
+      ? await getSeries(DAILY_RECORD_SERIES, { from, to, points: range.points })
       : null;
+
+  // A newer range was picked while this one was in flight. Everything below
+  // paints; none of it may.
+  if (mine !== generation) return;
+
+  // The Lab reads the *same* results the panels below do — it is a second view
+  // of one fetch, not a second fetch. Adding a request per panel would be the
+  // one change on this page a reader could actually feel.
+  if (range.monthly) {
+    clearLab(
+      'The four kinematic panels are built on the daily publication series. The 1871 tier is a different series at a different resolution, so its velocity would not be the same quantity — pick a daily range to bring the Lab back.',
+    );
+  } else {
+    renderLab(
+      labDataFrom({
+        range,
+        close: close ?? regimePlaceholder(),
+        filtered: filtered ?? regimePlaceholder(),
+        velocity: velocity ?? regimePlaceholder(),
+        acceleration: acceleration ?? regimePlaceholder(),
+        jerk: jerk ?? regimePlaceholder(),
+        regime,
+        state,
+      }),
+    );
+  }
 
   const snapshot = renderState(twoLayer);
   renderRegime(regime, state, coverage, range);
@@ -1756,11 +1876,21 @@ function regimePlaceholder(): ApiResult<AssetHistory> {
   return { ok: false, kind: 'not_found', message: 'not requested for this range' };
 }
 
+/**
+ * Two ranges are the same request or they are not.
+ *
+ * The key alone is not enough once Custom exists: two custom ranges share a key
+ * and differ in the only thing that matters about them.
+ */
+function sameRange(a: RangeSpec, b: RangeSpec): boolean {
+  return a.key === b.key && a.from === b.from && a.to === b.to;
+}
+
 async function main(): Promise<void> {
   let current = rangeFromUrl();
 
   const select = (range: RangeSpec) => {
-    if (range.key === current.key) return;
+    if (sameRange(range, current)) return;
     current = range;
     writeRangeToUrl(range);
     renderRangeControl(current, select);
