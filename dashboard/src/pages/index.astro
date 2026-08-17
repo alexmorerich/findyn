@@ -9,6 +9,20 @@ import Base from '../layouts/Base.astro';
   heading="Where the market is"
   intro="Position, velocity, regime, instability and a distribution — not a target. Every number here is estimated from information that was available on its own date, and every one of them links to the page that shows how it was built."
 >
+  <section class="panel" aria-labelledby="portfolio-h">
+    <div class="panel__head">
+      <h2 id="portfolio-h">Portfolio</h2>
+      <span class="panel__note">/api/v1/portfolio</span>
+    </div>
+    <p class="prose">
+      The payoff layer: the balanced profile&rsquo;s strategic weights, tilted from a 60/30/10
+      neutral mix by what the engines are saying. A summary — the full
+      <a href="/portfolio">portfolio page</a> shows all three profiles as distributions, with the
+      engine states behind every weight. Distributions, never targets.
+    </p>
+    <div id="portfolio-strip" style="margin-top:0.85rem"></div>
+  </section>
+
   <section class="panel" aria-labelledby="now-h">
     <div class="panel__head">
       <h2 id="now-h">Right now</h2>
@@ -68,6 +82,8 @@ import Base from '../layouts/Base.astro';
 <script>
   import '../scripts/overview';
   import { mountEngines } from '../scripts/engines';
+  import { mountPortfolioStrip } from '../scripts/portfolio-strip';
 
+  void mountPortfolioStrip('#portfolio-strip');
   void mountEngines('#engines');
 </script>

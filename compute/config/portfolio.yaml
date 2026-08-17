@@ -1,0 +1,154 @@
+# FinDynamics — Portfolio layer (Phase 6).
+#
+# The payoff layer: it turns the five engines' AssetStates into a *distribution*
+# over strategic weights per risk profile, plus a templated conditional
+# implication. It commands no trades and names no price target — the same
+# non-goals as FINDYN_V1_SPEC.md §0/§12. Everything the allocator branches on
+# lives in this file: a strategic mix that only exists in Python is one nobody
+# can recalibrate without a deploy.
+#
+# Read findynamics/portfolio/allocate.py's module docstring before touching the
+# numbers here — the method is documented there, and these are its knobs.
+
+model_version: portfolio-1.0.0
+
+# --- The weight distribution (allocate.py) ---------------------------------
+#
+# The distribution is produced by resampling each engine's expected return with
+# a spread set by its own confidence, then recomputing the weights per sample.
+# A high-confidence engine barely moves between samples and its weight band is
+# tight; a low-confidence one is uncertain and its band is wide. That is the
+# whole design: the fan on the dashboard is the engines' confidence made visible,
+# not a black-box error bar.
+distribution:
+  # Draws behind each asset's quantile band. A thousand is enough for stable
+  # 5th/95th percentiles and cheap enough to run inside the nightly job.
+  samples: 1000
+  # Fixed so a refit on the same states lands in the same place; the PIT replay
+  # test depends on it. Changing this is a model change, not a tuning knob.
+  seed: 20260813
+  # Annualized-return uncertainty (decimal) an engine of *zero* confidence
+  # carries. The per-asset spread is this scaled by (1 - confidence), so a
+  # confidence-1 engine is a point and a confidence-0 one swings ±4pp of return
+  # a sample. 0.04 is roughly the standard error of a one-year equity premium
+  # estimate — the band should be honest about how little any of this is known.
+  return_sd: 0.04
+  # The quantiles stored per asset. p50 is the central read; the outer pair is
+  # the fan's edge. Kept to five so the D1 blob stays small and the box/whisker
+  # chart has exactly what it draws.
+  quantiles: [0.05, 0.25, 0.5, 0.75, 0.95]
+
+# --- Turning a 0-100 risk score into a variance proxy ----------------------
+#
+# The allocator is mean-variance flavoured, so it needs a variance, and the
+# engines publish a 0-100 risk score. This is the agreed map between them:
+# sigma = floor + (risk_score / 100) * scale. floor keeps cash (risk_score ~ 0)
+# from having zero variance and dividing to infinity; scale sets what a 100
+# means — roughly a 32% annualized vol, which is a 10y Treasury through 2022 or
+# gold in 1980, the assets the shared axis was calibrated on.
+risk:
+  sigma_floor: 0.02
+  sigma_scale: 0.30
+
+# --- Staleness --------------------------------------------------------------
+#
+# An engine whose newest state is older than this (in calendar days behind the
+# panel's as_of) is treated as not reporting: its asset falls back to the
+# profile's neutral weight and the allocation is flagged degraded. Five days
+# matches serving's ASSET_STALE_DAYS, so the compute plane and the API agree
+# about which engines are stale.
+max_state_age_days: 5
+
+# --- Risk profiles ----------------------------------------------------------
+#
+# Each profile is a *neutral* strategic mix and a set of per-asset caps. The
+# allocator tilts away from neutral toward assets with above-average
+# confidence-weighted risk-adjusted excess return; tilt_strength is how far it
+# is allowed to lean. `money` is cash — the risk-free leg — and appears in the
+# conservative mix as a genuine holding, not just as the benchmark rate.
+#
+# `balanced.neutral` is deliberately 60/30/10 equity/rates/gold: it is the exact
+# static benchmark the walk-forward backtest measures against, so "balanced at
+# neutral" and "the benchmark" are the same portfolio by construction.
+#
+# Every cap must be >= that asset's neutral weight (the loader enforces it):
+# a cap below neutral would make the stale-engine fallback itself illegal.
+# crypto is capped at 0 in every profile — the experimental engine is excluded
+# from allocations (01-target-architecture.md §3 rule 5), belt and braces with
+# the registry filter and the import-linter quarantine.
+profiles:
+  conservative:
+    # Leans on rates and cash; equity is a minority holding.
+    neutral: { equity: 0.30, rates: 0.40, gold: 0.10, money: 0.20 }
+    caps:    { equity: 0.45, rates: 0.65, gold: 0.25, money: 0.60, crypto: 0.0 }
+    # A cautious tilt: the strategic mix dominates and signals nudge it.
+    tilt_strength: 0.6
+
+  balanced:
+    # 60/30/10 — the backtest benchmark.
+    neutral: { equity: 0.60, rates: 0.30, gold: 0.10 }
+    caps:    { equity: 0.75, rates: 0.50, gold: 0.30, money: 0.40, crypto: 0.0 }
+    tilt_strength: 1.0
+
+  growth:
+    # Equity-forward; rates and gold are diversifiers.
+    neutral: { equity: 0.75, rates: 0.15, gold: 0.10 }
+    caps:    { equity: 0.90, rates: 0.40, gold: 0.30, money: 0.25, crypto: 0.0 }
+    # The most permissive tilt, because a growth investor is buying the view.
+    tilt_strength: 1.4
+
+# --- Conditional implications (implications.py) -----------------------------
+#
+# Reviewed text, templated per (overweight asset × tilt-magnitude band), never
+# model-generated (FINDYN_V1_SPEC.md §12). The allocator picks the asset most
+# overweight vs neutral and the one most underweight, measures how far the lean
+# goes, and fills the matching sentence. The wording is conditional throughout
+# — "may consider", not "should" — because the output is a distribution and an
+# implication, not an instruction.
+implications:
+  # Band edges on the largest absolute weight delta vs neutral (in weight
+  # points). Below `modest` the allocation is essentially the strategic mix and
+  # says so; above `pronounced` it is leaning hard.
+  bands:
+    modest: 0.03
+    pronounced: 0.10
+
+  # Keyed by the tilt band. `{over}` and `{under}` are filled with the plain
+  # names of the most over- and under-weighted assets.
+  templates:
+    neutral: >-
+      Under this distribution the allocation sits at its strategic neutral mix;
+      there is no material tilt to act on, and investors may consider holding
+      the profile's baseline weights.
+    modest: >-
+      Under this distribution the allocation leans modestly toward {over} and
+      away from {under} relative to its neutral mix. Investors comfortable with
+      this profile may consider a small tilt in that direction, sized to their
+      own constraints.
+    pronounced: >-
+      Under this distribution the allocation leans pronouncedly toward {over}
+      and away from {under} relative to its neutral mix. Investors may consider
+      how much of that tilt fits their risk tolerance before acting on it, and
+      note that the width of each weight band reflects how confident the engines
+      are.
+
+  # Appended when any input engine was stale or missing, so the reader is told
+  # the tilt rests on a partial panel.
+  degraded_suffix: >-
+    One or more engines did not report for this run, so the affected assets are
+    held at their neutral weight and the allocation is flagged degraded; read
+    the tilt with that in mind.
+
+  # §12's disclaimer, verbatim. Travels on every implication.
+  disclaimer: >-
+    Not investment advice. Final allocation depends on investor constraints,
+    risk tolerance, and tax jurisdiction.
+
+# Plain-language names used in the implication sentences and the dashboard's
+# "why" trace. Keyed by engine name.
+labels:
+  equity: equities
+  rates: government bonds
+  gold: gold
+  money: cash
+  crypto: crypto

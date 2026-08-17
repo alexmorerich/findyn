@@ -1,5 +1,5 @@
 import type { Env } from '../types';
-import { ASSETS, FORCES, HORIZONS } from '../domain';
+import { ASSETS, FORCES, HORIZONS, PROFILES } from '../domain';
 
 /**
  * Compute-plane write-back (FINDYN_V1_SPEC.md §6).
@@ -167,6 +167,29 @@ export interface ForecastRow {
   model_version: string;
 }
 
+/**
+ * P6: one profile's strategic weight distribution for one run.
+ *
+ * `weights` is a JSON document (quantiles per asset, the neutral mix, the input
+ * AssetState references, the risk-free rate) rather than a set of columns,
+ * because a distribution over a variable universe has no fixed column shape —
+ * the same reason `engine_output` keys on a metric name. It is stored verbatim
+ * and served verbatim; the only thing checked here is that it is an object, so a
+ * malformed blob is rejected at the door rather than 500-ing a read.
+ *
+ * There is deliberately no field for a single weight or a trade — the §0/§12
+ * non-goals made structural, exactly as `forecast_distribution` has no column
+ * for a point forecast.
+ */
+export interface PortfolioStateRow {
+  profile: string;
+  as_of: string;
+  model_version: string;
+  weights: Record<string, unknown>;
+  implication: string;
+  degraded: boolean;
+}
+
 export interface WriteBackPayload {
   model_version?: string;
   generated_at?: string;
@@ -181,6 +204,7 @@ export interface WriteBackPayload {
   derived_features?: DerivedFeatureRow[];
   regime_state?: RegimeStateRow[];
   forecast_distribution?: ForecastRow[];
+  portfolio_state?: PortfolioStateRow[];
 }
 
 export interface WriteBackResult {
@@ -195,6 +219,7 @@ export interface WriteBackResult {
   derived_features: number;
   regime_state: number;
   forecast_distribution: number;
+  portfolio_state: number;
 }
 
 export class PayloadError extends Error {}
@@ -245,6 +270,13 @@ function requireRange(value: unknown, lo: number, hi: number, field: string): nu
     throw new PayloadError(`${field} must be within [${lo}, ${hi}], got ${n}`);
   }
   return n;
+}
+
+function requireObject(value: unknown, field: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new PayloadError(`${field} must be a JSON object`);
+  }
+  return value as Record<string, unknown>;
 }
 
 function requireMember(value: unknown, allowed: readonly string[], field: string): string {
@@ -428,6 +460,19 @@ export function validatePayload(raw: unknown): WriteBackPayload {
     model_version: requireString(r?.model_version, `regime_state[${i}].model_version`),
   }));
 
+  // The profile vocabulary is closed, like the asset one: an unknown profile
+  // means the two planes disagree about what exists, and the row would be one no
+  // endpoint can serve. `weights` is stored verbatim — only checked to be an
+  // object so a malformed blob fails here rather than on a read.
+  const portfolioState = (p.portfolio_state as PortfolioStateRow[] | undefined)?.map((s, i) => ({
+    profile: requireMember(s?.profile, PROFILES, `portfolio_state[${i}].profile`),
+    as_of: requireDate(s?.as_of, `portfolio_state[${i}].as_of`),
+    model_version: requireString(s?.model_version, `portfolio_state[${i}].model_version`),
+    weights: requireObject(s?.weights, `portfolio_state[${i}].weights`),
+    implication: requireString(s?.implication, `portfolio_state[${i}].implication`),
+    degraded: Boolean(s?.degraded),
+  }));
+
   const forecasts = (p.forecast_distribution as ForecastRow[] | undefined)?.map((f, i) => ({
     asset: requireMember(f?.asset, ASSETS, `forecast_distribution[${i}].asset`),
     as_of: requireDate(f?.as_of, `forecast_distribution[${i}].as_of`),
@@ -452,6 +497,7 @@ export function validatePayload(raw: unknown): WriteBackPayload {
     derived_features: derivedFeatures,
     regime_state: regimeState,
     forecast_distribution: forecasts,
+    portfolio_state: portfolioState,
   };
 }
 
@@ -564,6 +610,17 @@ export async function applyWriteBack(
        value = excluded.value, educational_only = excluded.educational_only`,
   );
 
+  // Keyed on (profile, as_of, model_version): a re-run replaces that profile's
+  // allocation for that model and leaves other models' history alone.
+  const portfolioStmt = db.prepare(
+    `INSERT INTO portfolio_state
+       (profile, as_of, model_version, weights, implication, degraded, written_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(profile, as_of, model_version) DO UPDATE SET
+       weights = excluded.weights, implication = excluded.implication,
+       degraded = excluded.degraded, written_at = excluded.written_at`,
+  );
+
   const result: WriteBackResult = {
     metadata: 0,
     observations: 0,
@@ -576,6 +633,7 @@ export async function applyWriteBack(
     derived_features: 0,
     regime_state: 0,
     forecast_distribution: 0,
+    portfolio_state: 0,
   };
 
   if (payload.metadata?.length) {
@@ -741,6 +799,23 @@ export async function applyWriteBack(
           f.educational_only ? 1 : 0,
           f.model_version,
           f.asset,
+        ),
+      ),
+    );
+  }
+
+  if (payload.portfolio_state?.length) {
+    result.portfolio_state = await runBatched(
+      db,
+      payload.portfolio_state.map((s) =>
+        portfolioStmt.bind(
+          s.profile,
+          s.as_of,
+          s.model_version,
+          JSON.stringify(s.weights),
+          s.implication,
+          s.degraded ? 1 : 0,
+          now,
         ),
       ),
     );

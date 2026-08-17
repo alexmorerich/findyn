@@ -139,6 +139,17 @@ source_modules = ["findynamics.engines.gold"]
 forbidden_modules = ["findynamics.engines.equity"]
 
 [[tool.importlinter.contracts]]
+name = "Portfolio consumes engine outputs via the registry, never engine internals"
+type = "forbidden"
+source_modules = ["findynamics.portfolio"]
+forbidden_modules = ["findynamics.engines"]
+# The layers contract lets a higher layer import a lower one, so portfolio
+# *could* reach into engines without this. It must not: it consumes the
+# AssetState contract and discovers engines by name through core.registry
+# (01-target-architecture.md §3 rule 3). A violation should say "portfolio
+# imported engines" outright rather than be legal under the layer stack.
+
+[[tool.importlinter.contracts]]
 name = "Crypto is quarantined"
 type = "forbidden"
 source_modules = [

@@ -38,6 +38,12 @@ from findynamics.data.accessor import PandasPITAccessor
 from findynamics.data.store import load_observations, required_series_ids
 from findynamics.engines import load_engines
 from findynamics.factors.compute import compute_factors
+from findynamics.portfolio import (
+    Allocation,
+    compute_allocations,
+    portfolio_asset_names,
+    weights_blob,
+)
 from jobs._common import (
     archive_simulation,
     base_parser,
@@ -170,6 +176,70 @@ def forecast_payload(row: ForecastQuantile) -> dict[str, Any]:
     }
 
 
+def portfolio_payload(allocation: Allocation) -> dict[str, Any]:
+    """One ``portfolio_state`` row — a weight *distribution*, never a target.
+
+    The whole distribution, its input ``AssetState`` references and the risk-free
+    rate travel in ``weights`` (a JSON blob), so one row answers
+    ``GET /api/v1/portfolio`` completely. ``degraded`` and the templated
+    implication ride in their own columns because the dashboard reads them
+    without parsing the blob.
+    """
+    return {
+        "profile": allocation.profile,
+        "as_of": allocation.as_of.isoformat(),
+        "model_version": allocation.model_version,
+        "weights": weights_blob(allocation),
+        "implication": allocation.implication,
+        "degraded": allocation.degraded,
+    }
+
+
+def build_portfolio(
+    state_objects: dict[str, AssetState],
+    world: WorldState,
+    config: SeriesConfig,
+) -> list[dict[str, Any]]:
+    """Allocate every profile from this run's states, or nothing on failure.
+
+    Consumes only the states of the enabled, *non-experimental* engines — the
+    set :func:`portfolio_asset_names` returns — so crypto never reaches an
+    allocation even when it is switched on. An engine that produced no state is
+    simply absent from the panel and falls back to its neutral weight, which is
+    the degraded path the chaos test exercises; the allocation is still
+    published, flagged.
+
+    A portfolio failure is logged and swallowed rather than failing the run: the
+    engines' own states and outputs have already been shaped and are worth
+    publishing without it.
+    """
+    try:
+        allowed = portfolio_asset_names(config)
+    except Exception as err:  # a config/registry problem, not a per-run one
+        log.warning("portfolio: cannot resolve the allocatable engines (%s); skipping", err)
+        return []
+
+    panel_states = {name: state_objects[name] for name in allowed if name in state_objects}
+    if not panel_states:
+        log.info("portfolio: no non-experimental engine published a state; nothing to allocate")
+        return []
+
+    try:
+        allocations = compute_allocations(panel_states, world)
+    except Exception as err:
+        log.exception("portfolio: allocation failed (%s); the run publishes without it", err)
+        return []
+
+    rows = [portfolio_payload(a) for a in allocations.values()]
+    log.info(
+        "portfolio: %d profile(s) from %d engine state(s)%s",
+        len(rows),
+        len(panel_states),
+        " (degraded)" if any(a.degraded for a in allocations.values()) else "",
+    )
+    return rows
+
+
 def derived_feature_payload(feature: DerivedFeature) -> dict[str, Any]:
     """One ``derived_features`` row.
 
@@ -211,6 +281,10 @@ def run(
             engine.full_history = True
 
     states: list[dict[str, Any]] = []
+    # The AssetState objects themselves (not just their wire form), keyed by
+    # engine, so the portfolio layer can consume this run's states in memory
+    # rather than reading them back out of D1.
+    state_objects: dict[str, AssetState] = {}
     outputs: list[dict[str, Any]] = []
     features: list[dict[str, Any]] = []
     regimes: list[dict[str, Any]] = []
@@ -251,6 +325,7 @@ def run(
 
         if state is not None:
             states.append(asset_state_payload(state))
+            state_objects[engine.name] = state
         outputs.extend(engine_output_payload(row) for row in rows)
         features.extend(derived_feature_payload(row) for row in feature_rows)
         regimes.extend(regime_state_payload(row) for row in regime_rows)
@@ -271,6 +346,12 @@ def run(
             len(regime_rows),
             len(forecast_rows),
         )
+
+    # The portfolio layer runs last: it consumes the states the engines just
+    # produced. It names no engine — which ones it may read comes from the
+    # registry filtered to non-experimental (build_portfolio), so a new engine
+    # joins an allocation without editing this file.
+    portfolios = build_portfolio(state_objects, world, config)
 
     if not states and not outputs and not features:
         log.error(
@@ -294,6 +375,7 @@ def run(
         "derived_features": features,
         "regime_state": regimes,
         "forecast_distribution": forecasts,
+        "portfolio_state": portfolios,
     }
 
     if out is not None:

@@ -450,6 +450,73 @@ export function getRegimeHistory(
 }
 
 // ---------------------------------------------------------------------------
+// Portfolio layer (P6) — weight distributions per risk profile
+// ---------------------------------------------------------------------------
+
+/** The risk profiles, least-to-most risk-seeking (mirrors domain.ts PROFILES). */
+export const PROFILES = ['conservative', 'balanced', 'growth'] as const;
+export type Profile = (typeof PROFILES)[number];
+
+export const PROFILE_LABELS: Record<string, { title: string; blurb: string }> = {
+  conservative: {
+    title: 'Conservative',
+    blurb: 'Rates- and cash-heavy; equity a minority holding. The smallest tilt.',
+  },
+  balanced: {
+    title: 'Balanced',
+    blurb: 'A 60/30/10 equity/rates/gold neutral — the backtest benchmark.',
+  },
+  growth: {
+    title: 'Growth',
+    blurb: 'Equity-forward; rates and gold as diversifiers. The most permissive tilt.',
+  },
+};
+
+/** One asset's weight band — a distribution, never a single number. */
+export interface WeightBand {
+  asset: string;
+  mean: number;
+  neutral: number;
+  delta: number;
+  degraded: boolean;
+  reason: string;
+  /** Quantile label ('q05'…'q95') -> weight. A degraded asset is a point mass. */
+  quantiles: Record<string, number>;
+}
+
+/** One input engine state, for the "why" expander. */
+export interface PortfolioInput {
+  asset: string;
+  as_of: string | null;
+  regime: string;
+  expected_return: number | null;
+  risk_score: number;
+  confidence: number;
+  stale: boolean;
+  reason: string;
+}
+
+export interface PortfolioState {
+  profile: string;
+  as_of: string;
+  model_version: string;
+  degraded: boolean;
+  implication: string;
+  method: string;
+  risk_free: number | null;
+  quantile_labels: string[];
+  assets: WeightBand[];
+  inputs: PortfolioInput[];
+  factors: Record<string, number>;
+  degraded_reason: string[];
+}
+
+/** Latest weight distribution + implication + inputs for one profile. */
+export function getPortfolio(profile: string): Promise<ApiResult<PortfolioState>> {
+  return apiGet<PortfolioState>(`/portfolio?profile=${encodeURIComponent(profile)}`);
+}
+
+// ---------------------------------------------------------------------------
 // Instability and forecasts (§3.2, §4, §11) — FinEquity, P3-C
 // ---------------------------------------------------------------------------
 

@@ -131,6 +131,39 @@ def portfolio_engines(
     return [engine for engine in engines if not engine.experimental]
 
 
+def portfolio_asset_names(
+    config: SeriesConfig,
+    *,
+    include_experimental: bool = False,
+) -> tuple[str, ...]:
+    """Names of the engines the portfolio layer may consume (§3 rule 5).
+
+    The names of :func:`portfolio_engines`, without building the engines. The
+    portfolio layer consumes ``AssetState`` rows keyed by asset name — it never
+    calls ``predict`` — so it needs the *names* of the enabled, non-experimental
+    engines, not instances of them. Reading the class's ``experimental`` classvar
+    off the registry avoids constructing five models (and their artifact stores)
+    just to filter one out, and keeps the portfolio decoupled from whether an
+    engine happens to be constructible.
+
+    Requires the engines to be registered already — the job layer imports them
+    via ``findynamics.engines.load_engines`` before the portfolio runs. An engine
+    enabled in config but absent from the registry is the same configuration
+    error :func:`enabled_engines` raises, for the same reason.
+    """
+    names: list[str] = []
+    for name in config.enabled_engine_names():
+        cls = ENGINES.get(name)
+        if cls is None:
+            raise RegistryError(
+                f"engine {name!r} is enabled in config but no implementation is registered"
+            )
+        if getattr(cls, "experimental", False) and not include_experimental:
+            continue
+        names.append(name)
+    return tuple(names)
+
+
 def experimental_engines() -> tuple[str, ...]:
     """Registered engine names whose class declares ``experimental = True``.
 

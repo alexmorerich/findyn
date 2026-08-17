@@ -27,6 +27,12 @@ import {
   getTwoLayerState,
 } from './equity';
 import {
+  DEFAULT_PROFILE,
+  UnknownProfileError,
+  assertKnownProfile,
+  getPortfolio,
+} from './portfolio';
+import {
   ASSETS,
   CRYPTO_REGIMES,
   DISCOUNT_HORIZONS,
@@ -35,6 +41,7 @@ import {
   GOLD_REGIMES,
   HORIZONS,
   MONEY_REGIMES,
+  PROFILES,
   RATE_REGIMES,
   REGIMES,
 } from '../domain';
@@ -81,6 +88,7 @@ api.get('/meta', (c) =>
         gold_regimes: GOLD_REGIMES,
         crypto_regimes: CRYPTO_REGIMES,
         discount_horizons: DISCOUNT_HORIZONS,
+        profiles: PROFILES,
         // Which of `assets` are research-only. Published so a client can find
         // out without hard-coding the name of the one engine that is.
         experimental_assets: EXPERIMENTAL_ASSETS,
@@ -268,6 +276,52 @@ api.get('/assets/:asset/history', async (c) => {
         experimental: isExperimentalAsset(asset),
       },
     ),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Portfolio layer (01-target-architecture.md §Portfolio, 04-ui-plan.md §P6)
+// ---------------------------------------------------------------------------
+
+/**
+ * The latest weight *distribution* for a profile, its conditional implication,
+ * and the input AssetState references. `profile` defaults to balanced; an unknown
+ * one is a 400 with the vocabulary, and a profile that has never been allocated
+ * is a 501 with the phase tag — the same "reserved, not delivered" convention the
+ * asset endpoints use, and the honest answer before the first portfolio run.
+ */
+api.get('/portfolio', async (c) => {
+  const profile = c.req.query('profile') ?? DEFAULT_PROFILE;
+  try {
+    assertKnownProfile(profile);
+  } catch (err) {
+    if (err instanceof UnknownProfileError) {
+      return c.json({ error: 'bad_request', message: err.message, profiles: PROFILES }, 400);
+    }
+    throw err;
+  }
+
+  const state = await getPortfolio(c.env, profile);
+  if (!state) {
+    return c.json(
+      {
+        error: 'not_implemented',
+        message: `The portfolio engine has not published the ${profile} profile yet.`,
+        milestone: 'P6',
+        profile,
+      },
+      501,
+    );
+  }
+
+  return c.json(
+    envelope(state, {
+      as_of: state.as_of,
+      model_version: state.model_version,
+      // The allocation's as_of is a market date, so it is measured in market
+      // days like the engines' states, not in ingestion hours.
+      stale: isAssetStale(state.as_of),
+    }),
   );
 });
 

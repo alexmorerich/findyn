@@ -1,0 +1,66 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="Portfolio"
+  description="Regime-conditional strategic weight distributions per risk profile, with a templated conditional implication and the engine states each weight was built from — read live from the FinDynamics API. Distributions, never targets; no trade commands."
+  eyebrow="FinDynamics"
+  heading="Strategic weights, as a distribution"
+  intro="Not a target and not a trade. For each risk profile the portfolio layer tilts a neutral strategic mix by the engines' confidence-weighted, risk-adjusted expected returns, and reports the result as a distribution — a fan whose width is how confident the engines are. A missing or stale engine falls back to its neutral weight and the whole allocation is flagged degraded."
+>
+  <section class="panel" aria-labelledby="profile-h">
+    <div class="panel__head">
+      <h2 id="profile-h">Risk profile</h2>
+      <span class="panel__note">/api/v1/portfolio?profile=</span>
+    </div>
+    <p class="prose">
+      Three profiles, least to most risk-seeking. The switcher re-reads the API; every weight
+      below is the median of a distribution, and the box and whiskers are its spread.
+    </p>
+    <div id="portfolio-switcher" class="switcher" role="group" aria-label="Risk profile"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="weights-h">
+    <div class="panel__head">
+      <h2 id="weights-h">Weight distribution</h2>
+      <span class="panel__note">quantiles per asset</span>
+    </div>
+    <p class="prose">
+      One row per asset. The box spans the 25th–75th percentile of the weight, the whiskers the
+      5th–95th, the marker is the median, and the hollow tick is the profile's neutral weight —
+      so the tilt is the distance between them. A degraded asset collapses to a point at neutral.
+    </p>
+    <div id="portfolio-weights" style="margin-top:0.85rem"></div>
+    <div id="portfolio-legend" style="margin-top:0.5rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="implication-h">
+    <div class="panel__head">
+      <h2 id="implication-h">Conditional implication</h2>
+      <span class="panel__note">FINDYN_V1_SPEC.md &sect;12</span>
+    </div>
+    <p class="prose">
+      Reviewed text, templated from the tilt — not model-generated, and conditional throughout.
+      It is an implication of the distribution, not an instruction.
+    </p>
+    <div id="portfolio-implication" style="margin-top:0.5rem"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="why-h">
+    <div class="panel__head">
+      <h2 id="why-h">Why these weights</h2>
+      <span class="panel__note">input AssetState references</span>
+    </div>
+    <p class="prose">
+      Every allocation is only as good as the engine states behind it. This lists each input
+      <code>AssetState</code> — its regime, expected return, risk and confidence, and whether it
+      was fresh — so a weight can be traced back to the engine that moved it.
+    </p>
+    <div id="portfolio-why" style="margin-top:0.85rem"></div>
+  </section>
+</Base>
+
+<script>
+  import '../scripts/portfolio';
+</script>

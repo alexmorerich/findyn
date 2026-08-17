@@ -13,6 +13,7 @@ const EXPECTED_TABLES = [
   'instability_index',
   'macro_series',
   'market_price',
+  'portfolio_state',
   'regime_state',
   'series_metadata',
   'tradable_proxy_mapping',

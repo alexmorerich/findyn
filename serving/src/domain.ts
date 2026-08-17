@@ -141,6 +141,21 @@ export const DISCOUNT_HORIZONS = [
 ] as const;
 export type DiscountHorizon = (typeof DISCOUNT_HORIZONS)[number];
 
+/**
+ * P6 — the portfolio risk profiles, owned by config/portfolio.yaml.
+ *
+ * A closed vocabulary like ASSETS: `/api/v1/portfolio?profile=` rejects anything
+ * outside it, and the write-back refuses a row for an unknown profile, so the two
+ * planes cannot disagree about which profiles exist. Ordered least-to-most
+ * risk-seeking, which is the order the dashboard's switcher shows them in.
+ */
+export const PROFILES = ['conservative', 'balanced', 'growth'] as const;
+export type Profile = (typeof PROFILES)[number];
+
+export function isKnownProfile(profile: string): profile is Profile {
+  return (PROFILES as readonly string[]).includes(profile);
+}
+
 /** §9 L2 — the five HMM regimes. */
 export const REGIMES = [
   'bull_expansion',
