@@ -62,21 +62,25 @@ def test_equity_series_ids_are_provider_native():
 def test_only_engines_whose_phase_has_landed_are_enabled():
     """An engine enabled before it can publish anything would be noise daily.
 
-    P1 shipped rates, P2 shipped money, P3 shipped equity, P4 shipped gold.
-    Crypto is configured but disabled, which is the correct state for an engine
-    that does not exist — and the ordering is ASSETS order, not config order, so
-    a run is deterministic.
+    P1 shipped rates, P2 shipped money, P3 shipped equity, P4 shipped gold, and
+    P5 shipped crypto — which is now enabled too, so every configured engine is
+    on. The ordering is ASSETS order, not config order, so a run is
+    deterministic.
 
     "Enabled" means "has something to say", not "has everything to say". Equity
     was enabled in P3-A while it still published no ``AssetState``, and gold
     behaves the same way before its first ``monthly_refit``: it publishes the
     driver panel, the jump intensity and the price history every run, and
     declines the state (``StateUnavailable``) until a chain is fitted.
+
+    Crypto being enabled is a statement about publication and nothing else. What
+    keeps it out of an allocation is ``experimental = True``, asserted in
+    tests/engines/crypto/test_engine.py::TestTheQuarantine — not this flag.
     """
     config = load_series_config()
-    assert config.enabled_engine_names() == ("money", "rates", "equity", "gold")
+    assert config.enabled_engine_names() == ("money", "rates", "equity", "gold", "crypto")
     assert set(config.engines) == {"money", "rates", "equity", "gold", "crypto"}
-    assert not config.is_enabled("crypto")
+    assert config.is_enabled("crypto")
 
 
 def test_the_rates_engine_declares_its_curve_in_config_not_code():

@@ -5,15 +5,21 @@
 # paragraphs on why that is a modelling result rather than unfinished work.
 # `confidence` is capped at 0.5 by construction and no branch can raise it.
 #
-# It ships DISABLED and stays disabled after this phase. Three independent gates
-# keep it out of anything that matters — this flag, `experimental = True` on the
-# engine class (which core.registry.portfolio_engines filters on), and the
-# `Crypto is quarantined` import-linter contract — because any one of them can be
-# switched off by somebody who has not read the docstrings.
+# It is ENABLED for PUBLICATION, and that is a narrower statement than it looks.
+# This flag was `false` through P5 and P6; turning it on buys exactly one thing —
+# a /crypto page with real numbers instead of a "planned" placeholder — and it
+# buys no influence whatsoever.
+#
+# The two gates that keep it out of anything that matters are UNTOUCHED:
+# `experimental = True` on the engine class (which core.registry.portfolio_engines
+# filters on, so there is no allocation weight this engine can move) and the
+# `Crypto is quarantined` import-linter contract. Publishing and allocating are
+# different verbs and only the first one is switched on here. Do not read this
+# flag as permission to relax either of the other two.
 #
 # Every threshold the model branches on lives in this file. A rule that only
 # exists in Python is a rule nobody can recalibrate without a deploy.
-enabled: false
+enabled: true
 
 # --- The liquidity beta (engines/crypto/liquidity_beta.py) -----------------
 #

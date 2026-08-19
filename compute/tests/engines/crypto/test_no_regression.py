@@ -1,29 +1,40 @@
-"""P5 must not change what the nightly run publishes for anything else.
+"""Crypto must not change what the nightly run publishes for anything else.
 
-The phase's acceptance asks that, with ``enabled: false``, the daily job's output
-be byte-identical to before this phase. That is asserted here, and one deviation
-is asserted **explicitly** rather than glossed over:
+P5's acceptance originally asked that, with ``enabled: false``, the daily job's
+output be byte-identical to before that phase. The flag is now ``true`` — the
+engine publishes so the /crypto page reads real numbers instead of a milestone
+placeholder — so the question this file answers has changed shape. It is no
+longer "does the disabled engine stay inert" but the strictly harder one:
 
-    P5 adds exactly one row to the `factors` array — `global_liquidity` — and
-    changes nothing else anywhere in the payload.
+    **crypto is ADDITIVE.** It contributes its own rows and moves nothing that
+    was already there.
+
+That is worth more than the original guarantee, because "inert while switched
+off" was only ever true by construction. This version has to hold while the
+engine actually runs.
+
+One deviation is still asserted **explicitly** rather than glossed over:
+
+    Crypto adds exactly one row to the `factors` array — `global_liquidity` —
+    and changes nothing else anywhere in the payload.
 
 That row is not collateral damage from the crypto engine; it is a deliberate
 Layer-0 addition the phase brief asks for in its own right ("add a
 `global_liquidity` factor to series.yaml"), and Layer 0 is computed for every run
-regardless of which engines are enabled. The two requirements are in tension and
-they cannot both be met literally: a shared factor that only appears when an
-experimental engine is switched on would not be a shared factor.
+regardless of which engines are enabled. A shared factor that only appeared when
+an experimental engine was switched on would not be a shared factor.
 
-So the guarantee this file proves is the stronger useful one:
+What is asserted, in order:
 
 1. every factor that existed before P5 scores **identically**, component for
-   component (:class:`TestTheExistingFactorsAreUntouched`);
-2. the crypto engine contributes **nothing at all** while disabled — it is not
-   imported, not instantiated, and appears in no array
-   (:class:`TestTheDisabledEngineIsInert`);
-3. merely *registering* the engine changes nothing either, so the difference
-   between this phase and the one before it is the config flag and nothing
-   latent (:class:`TestRegistrationAloneChangesNothing`).
+   component (:class:`TestTheExistingFactorsAreUntouched`) — unchanged, and still
+   the load-bearing one, because `global_liquidity` overlaps `liquidity` on both
+   of its series;
+2. the engine is enabled, imported and instantiated, and is **still excluded from
+   the portfolio layer** (:class:`TestTheEnabledEngineIsAdditive`). Publishing and
+   allocating are different verbs and only the first one is switched on;
+3. registration order and import side effects still move nothing
+   (:class:`TestRegistrationAloneChangesNothing`).
 """
 
 from __future__ import annotations
@@ -36,7 +47,11 @@ import pandas as pd
 import pytest
 
 from findynamics.core.config import load_series_config
-from findynamics.core.registry import enabled_engines
+from findynamics.core.registry import (
+    enabled_engines,
+    portfolio_asset_names,
+    portfolio_engines,
+)
 from findynamics.data.accessor import PandasPITAccessor
 from findynamics.engines import load_engines
 from findynamics.factors.compute import compute_factors
@@ -69,6 +84,22 @@ def accessor(crypto_observations) -> PandasPITAccessor:
     to the old factor would hide.
     """
     return PandasPITAccessor(crypto_observations, AS_OF)
+
+
+@pytest.fixture
+def crypto_disabled_config(config):
+    """The shipped config with crypto switched back off.
+
+    Stands in for the pre-activation state, so the flag can be shown to be
+    load-bearing in *both* directions rather than only in the one it now sits in.
+    """
+    return replace(
+        config,
+        engines={
+            name: replace(entry, enabled=False) if name == "crypto" else entry
+            for name, entry in config.engines.items()
+        },
+    )
 
 
 @pytest.fixture(scope="module")
@@ -152,36 +183,51 @@ class TestTheExistingFactorsAreUntouched:
         assert mentioned == {"FRED:M2SL", "FRED:WALCL"}
 
 
-class TestTheDisabledEngineIsInert:
-    def test_it_ships_disabled(self, config):
-        assert config.is_enabled("crypto") is False
+class TestTheEnabledEngineIsAdditive:
+    def test_it_ships_enabled(self, config):
+        assert config.is_enabled("crypto") is True
 
-    def test_load_engines_does_not_import_it(self, config):
-        """The import is what registers the engine, and it is guarded by the flag.
+    def test_load_engines_imports_it(self, config):
+        """The import is what registers the engine, and it follows the flag.
 
         Asserted on the return value rather than on `sys.modules`, because the
         test suite imports the package directly elsewhere and would poison a
-        module-table check. What matters is that `load_engines` did not ask for
-        it.
+        module-table check. What matters is that `load_engines` asked for it.
         """
-        assert "crypto" not in load_engines(config)
+        assert "crypto" in load_engines(config)
 
-    def test_it_is_not_instantiated_for_a_run(self, config):
-        assert "crypto" not in [engine.name for engine in enabled_engines(config)]
+    def test_it_is_instantiated_for_a_run(self, config):
+        assert "crypto" in [engine.name for engine in enabled_engines(config)]
 
-    def test_enabling_it_is_the_only_thing_that_changes_that(self, crypto_only_config):
-        """The flag is load-bearing, so the disabled case is a real state not a coincidence."""
-        assert [engine.name for engine in enabled_engines(crypto_only_config)] == ["crypto"]
+    def test_it_is_still_excluded_from_the_portfolio_layer(self, config):
+        """THE assertion in this class, and the reason enabling it was safe.
+
+        `enabled` governs PUBLICATION; `experimental` governs INFLUENCE. The
+        engine now computes, writes back and has a page with real numbers on it,
+        and it still cannot move a single allocation weight. If a future edit ever
+        collapses those two flags into one — or drops `experimental` because "the
+        engine is live now, surely it counts" — this is what fails.
+        """
+        assert "crypto" not in portfolio_asset_names(config)
+        assert "crypto" not in [engine.name for engine in portfolio_engines(config)]
+
+    def test_disabling_it_is_still_what_turns_it_off(self, crypto_disabled_config):
+        """The flag is load-bearing in both directions, not just the one it sits in."""
+        assert "crypto" not in [engine.name for engine in enabled_engines(crypto_disabled_config)]
 
 
 class TestRegistrationAloneChangesNothing:
     def test_importing_the_package_leaves_the_enabled_set_alone(self, config):
-        """The difference between P4 and P5 for a nightly run is the config flag.
+        """What a run publishes follows config, not the import table.
 
         Importing `findynamics.engines.crypto` registers the class. If mere
         registration could change what a run publishes — through a registry
-        iteration order, a global, an import side effect — then shipping the code
-        would have changed the output even with the flag off.
+        iteration order, a global, an import side effect — then which engines ran
+        would depend on which modules some earlier caller happened to touch.
+
+        This used to be trivially true while the flag was off. It is a real
+        assertion now: crypto is *in* the set, and importing it again must not
+        duplicate, reorder or otherwise disturb it.
         """
         before = [engine.name for engine in enabled_engines(config)]
 
@@ -189,7 +235,6 @@ class TestRegistrationAloneChangesNothing:
 
         after = [engine.name for engine in enabled_engines(config)]
         assert after == before
-        assert "crypto" not in after
 
     def test_the_factor_scores_are_unaffected_by_registration(self, accessor, config):
         import findynamics.engines.crypto  # noqa: F401
@@ -198,39 +243,45 @@ class TestRegistrationAloneChangesNothing:
         second = factor_payload(compute_factors(accessor, config))
         assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
 
-    def test_the_envelope_model_version_carries_no_crypto_version(self, config):
+    def test_the_envelope_model_version_now_carries_the_crypto_version(self, config):
         """`model_version` is joined from the states a run produced.
 
-        A disabled engine produces none, so the string a run publishes is the
-        same one it published before this phase.
+        An enabled engine contributes its version, so the envelope's run label now
+        names crypto. Asserted rather than left implicit because this is the one
+        field where enabling an engine is visible to *every* consumer, including
+        ones that never read a crypto row — a client pinning the exact envelope
+        string will see it change, and should find the reason in a test.
         """
         versions = sorted({engine.version for engine in enabled_engines(config)})
-        assert not any(version.startswith("crypto-") for version in versions)
+        assert any(version.startswith("crypto-") for version in versions)
 
 
-def test_the_new_series_are_only_fetched_when_the_engine_is_enabled(config, crypto_only_config):
+def test_the_crypto_series_are_fetched_only_while_the_engine_is_enabled(
+    config, crypto_disabled_config
+):
     """Nightly cost, not just nightly output.
 
-    `jobs.daily` asks each *enabled* engine for `required_series`, so a disabled
-    crypto engine adds no fetch — the bitcoin price and the four blockchain.info
-    charts are not requested at all. Worth pinning separately from the payload:
-    an engine can be inert in what it publishes and still be expensive.
+    `jobs.daily` asks each *enabled* engine for `required_series`. Now that crypto
+    is on, the bitcoin price and the four blockchain.info charts ARE requested
+    every night — that is the running cost of the /crypto page, and it belongs in
+    a test rather than being discovered on a bill. Switching the flag back off
+    must remove them again, which is what pins the cost to the flag.
     """
     from findynamics.data.store import required_series_ids
 
-    disabled_engine_series = {
+    enabled_engine_series = {
         series_id for engine in enabled_engines(config) for series_id in engine.required_series()
     }
-    enabled_engine_series = {
+    disabled_engine_series = {
         series_id
-        for engine in enabled_engines(crypto_only_config)
+        for engine in enabled_engines(crypto_disabled_config)
         for series_id in engine.required_series()
     }
 
-    assert not any(s.startswith("BLOCKCHAIN:") for s in disabled_engine_series)
-    assert "STOOQ:BTCUSD" not in disabled_engine_series
     assert {"STOOQ:BTCUSD", "YAHOO:BTC-USD"} <= enabled_engine_series
     assert any(s.startswith("BLOCKCHAIN:") for s in enabled_engine_series)
+    assert not any(s.startswith("BLOCKCHAIN:") for s in disabled_engine_series)
+    assert "STOOQ:BTCUSD" not in disabled_engine_series
 
     # The factor layer still asks for M2SL and WALCL either way — they were
     # already ingested for `liquidity` before this phase, so `global_liquidity`
