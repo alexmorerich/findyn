@@ -32,8 +32,12 @@ class TestDistribution:
         confident = dict(full_panel_states(AS_OF))
         unconfident = dict(full_panel_states(AS_OF))
         unconfident["equity"] = make_state(
-            "equity", AS_OF, expected_return=0.085, risk_score=55.0,
-            confidence=0.15, regime="normal_expansion",
+            "equity",
+            AS_OF,
+            expected_return=0.085,
+            risk_score=55.0,
+            confidence=0.15,
+            regime="normal_expansion",
         )
 
         eq_confident = _balanced(confident).weights["equity"].quantiles
@@ -46,7 +50,11 @@ class TestDistribution:
         states = dict(full_panel_states(AS_OF))
         # Make equity dramatically more attractive; it should lean above neutral.
         states["equity"] = make_state(
-            "equity", AS_OF, expected_return=0.20, risk_score=45.0, confidence=0.8,
+            "equity",
+            AS_OF,
+            expected_return=0.20,
+            risk_score=45.0,
+            confidence=0.8,
             regime="bull_expansion",
         )
         alloc = _balanced(states)
@@ -58,14 +66,33 @@ class TestDistribution:
         # Simplest: equal expected_return over risk_free and equal risk_score.
         rf = 0.04
         states = {
-            "money": make_state("money", AS_OF, expected_return=rf, risk_score=2.0,
-                                confidence=0.8, regime="normal"),
-            "rates": make_state("rates", AS_OF, expected_return=rf + 0.03, risk_score=40.0,
-                                confidence=0.6, regime="flat"),
-            "equity": make_state("equity", AS_OF, expected_return=rf + 0.03, risk_score=40.0,
-                                 confidence=0.6, regime="normal_expansion"),
-            "gold": make_state("gold", AS_OF, expected_return=rf + 0.03, risk_score=40.0,
-                               confidence=0.6, regime="hedge_bid"),
+            "money": make_state(
+                "money", AS_OF, expected_return=rf, risk_score=2.0, confidence=0.8, regime="normal"
+            ),
+            "rates": make_state(
+                "rates",
+                AS_OF,
+                expected_return=rf + 0.03,
+                risk_score=40.0,
+                confidence=0.6,
+                regime="flat",
+            ),
+            "equity": make_state(
+                "equity",
+                AS_OF,
+                expected_return=rf + 0.03,
+                risk_score=40.0,
+                confidence=0.6,
+                regime="normal_expansion",
+            ),
+            "gold": make_state(
+                "gold",
+                AS_OF,
+                expected_return=rf + 0.03,
+                risk_score=40.0,
+                confidence=0.6,
+                regime="hedge_bid",
+            ),
         }
         alloc = _balanced(states)
         for band in alloc.weights.values():
@@ -76,7 +103,11 @@ class TestDistribution:
         balanced = config.profile("balanced")
         states = dict(full_panel_states(AS_OF))
         states["equity"] = make_state(
-            "equity", AS_OF, expected_return=0.5, risk_score=30.0, confidence=0.9,
+            "equity",
+            AS_OF,
+            expected_return=0.5,
+            risk_score=30.0,
+            confidence=0.9,
             regime="bull_expansion",
         )
         alloc = _balanced(states)
@@ -98,7 +129,9 @@ class TestReproducibility:
         allocs = compute_allocations(full_panel_states(AS_OF), make_world(AS_OF))
         # Growth leans harder into equity than conservative — different tilt and
         # different neutral, so the two are not the same allocation.
-        assert allocs["growth"].weights["equity"].mean > allocs["conservative"].weights["equity"].mean
+        assert (
+            allocs["growth"].weights["equity"].mean > allocs["conservative"].weights["equity"].mean
+        )
 
 
 class TestSerialization:

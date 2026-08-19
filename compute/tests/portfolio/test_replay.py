@@ -27,15 +27,33 @@ _EQUITY_CONF = {CUTOFFS[0]: 0.35, CUTOFFS[1]: 0.6, CUTOFFS[2]: 0.7}
 
 def _states_at(cutoff: date) -> dict:
     return {
-        "money": make_state("money", cutoff, expected_return=0.01, risk_score=2.0,
-                            confidence=0.8, regime="normal"),
-        "rates": make_state("rates", cutoff, expected_return=0.03, risk_score=35.0,
-                            confidence=0.6, regime="steep_easing"),
-        "equity": make_state("equity", cutoff, expected_return=_EQUITY_ER[cutoff],
-                             risk_score=60.0, confidence=_EQUITY_CONF[cutoff],
-                             regime="bear" if cutoff == CUTOFFS[0] else "normal_expansion"),
-        "gold": make_state("gold", cutoff, expected_return=0.05, risk_score=42.0,
-                           confidence=0.5, regime="crisis_bid"),
+        "money": make_state(
+            "money", cutoff, expected_return=0.01, risk_score=2.0, confidence=0.8, regime="normal"
+        ),
+        "rates": make_state(
+            "rates",
+            cutoff,
+            expected_return=0.03,
+            risk_score=35.0,
+            confidence=0.6,
+            regime="steep_easing",
+        ),
+        "equity": make_state(
+            "equity",
+            cutoff,
+            expected_return=_EQUITY_ER[cutoff],
+            risk_score=60.0,
+            confidence=_EQUITY_CONF[cutoff],
+            regime="bear" if cutoff == CUTOFFS[0] else "normal_expansion",
+        ),
+        "gold": make_state(
+            "gold",
+            cutoff,
+            expected_return=0.05,
+            risk_score=42.0,
+            confidence=0.5,
+            regime="crisis_bid",
+        ),
     }
 
 

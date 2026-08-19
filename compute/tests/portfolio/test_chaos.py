@@ -45,8 +45,12 @@ def test_a_frozen_engine_reads_as_stale():
     """Simulate staleness the way the chaos test does: freeze one engine's as_of."""
     states = dict(full_panel_states(AS_OF))
     states["gold"] = make_state(
-        "gold", AS_OF - timedelta(days=14), expected_return=0.03, risk_score=40.0,
-        confidence=0.5, regime="hedge_bid",
+        "gold",
+        AS_OF - timedelta(days=14),
+        expected_return=0.03,
+        risk_score=40.0,
+        confidence=0.5,
+        regime="hedge_bid",
     )
     alloc = _balanced(states)
     assert alloc.weights["gold"].degraded is True

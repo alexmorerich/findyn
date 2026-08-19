@@ -33,7 +33,7 @@ class TestMetrics:
         returns = pd.Series([0.01] * 12)
         cash = pd.Series([0.0] * 12)
         m = bt._metrics(returns, cash)
-        assert m["cagr"] == pytest.approx(0.01 ** 0 * ((1.01**12) - 1.0), rel=1e-6)
+        assert m["cagr"] == pytest.approx(0.01**0 * ((1.01**12) - 1.0), rel=1e-6)
         assert m["months"] == 12
         assert m["max_drawdown"] == pytest.approx(0.0)
 
@@ -75,9 +75,7 @@ class TestPITStateBuilders:
 class TestWalkForward:
     def test_a_short_walk_beats_the_benchmark_drawdown_through_2008(self):
         """The headline robustness claim, on a short window to stay affordable."""
-        result = bt.run_backtest(
-            FIXTURES, start=date(2006, 1, 31), end=date(2009, 12, 31)
-        )
+        result = bt.run_backtest(FIXTURES, start=date(2006, 1, 31), end=date(2009, 12, 31))
         assert len(result.dates) >= 24
         # Every month is a valid allocation summing to 1.
         for weights in result.weights:

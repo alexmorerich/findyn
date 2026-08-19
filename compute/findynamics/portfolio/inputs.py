@@ -135,9 +135,7 @@ def assemble_panel(
         assets[asset] = _asset_input(asset, states.get(asset), world.as_of, risk_free, config)
 
     factors = {
-        name: score
-        for name in CONTEXT_FACTORS
-        if (score := world.factor_score(name)) is not None
+        name: score for name in CONTEXT_FACTORS if (score := world.factor_score(name)) is not None
     }
 
     return DecisionPanel(

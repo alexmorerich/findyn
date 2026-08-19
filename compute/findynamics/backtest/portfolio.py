@@ -247,8 +247,13 @@ def _forward_returns(monthly: dict[str, pd.Series], months: list[pd.Timestamp]) 
         bond_ret = carry - BOND_DURATION * d_yield
         cash_ret = (y3m[t] / 100.0) / 12.0
         records.append(
-            {"date": t.date(), "equity": equity_ret, "rates": bond_ret, "gold": gold_ret,
-             "money": cash_ret}
+            {
+                "date": t.date(),
+                "equity": equity_ret,
+                "rates": bond_ret,
+                "gold": gold_ret,
+                "money": cash_ret,
+            }
         )
     return pd.DataFrame(records).set_index("date")
 

@@ -45,8 +45,12 @@ class TestPanel:
         states = dict(full_panel_states(AS_OF))
         stale_date = AS_OF - timedelta(days=30)
         states["rates"] = make_state(
-            "rates", stale_date, expected_return=0.052, risk_score=38.0,
-            confidence=0.65, regime="flat",
+            "rates",
+            stale_date,
+            expected_return=0.052,
+            risk_score=38.0,
+            confidence=0.65,
+            regime="flat",
         )
         panel = _panel(states)
         assert panel.get("rates").stale is True
@@ -56,8 +60,12 @@ class TestPanel:
         """A week-old cash rate is no benchmark; every excess return goes unknown."""
         states = dict(full_panel_states(AS_OF))
         states["money"] = make_state(
-            "money", AS_OF - timedelta(days=30), expected_return=0.045, risk_score=2.0,
-            confidence=0.8, regime="normal",
+            "money",
+            AS_OF - timedelta(days=30),
+            expected_return=0.045,
+            risk_score=2.0,
+            confidence=0.8,
+            regime="normal",
         )
         panel = _panel(states)
         assert panel.risk_free is None

@@ -129,9 +129,7 @@ def _parse_profile(name: str, raw: object) -> ProfileConfig:
     neutral = _parse_weight_map(raw.get("neutral"), f"profiles.{name}.neutral")
     total = sum(neutral.values())
     if abs(total - 1.0) > _SUM_TOLERANCE:
-        raise PortfolioConfigError(
-            f"profiles.{name}.neutral must sum to 1.0, got {total:.6f}"
-        )
+        raise PortfolioConfigError(f"profiles.{name}.neutral must sum to 1.0, got {total:.6f}")
     # A zero-weight asset in the neutral mix can never be allocated — the tilt is
     # multiplicative (``neutral · exp(...)``), so a zero prior stays zero however
     # attractive the asset looks. Naming one is a mistake; omit it instead.

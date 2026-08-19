@@ -254,9 +254,7 @@ def allocate(panel: DecisionPanel, profile: ProfileConfig, config: PortfolioConf
     # every draw was capped and summed to 1, so their mean does too.
     guardrails.validate(means, caps)
 
-    degraded_reason = tuple(
-        f"{a}: {bands[a].reason}" for a in degraded if bands[a].reason
-    )
+    degraded_reason = tuple(f"{a}: {bands[a].reason}" for a in degraded if bands[a].reason)
     inputs = tuple(
         InputRef(
             asset=a,
