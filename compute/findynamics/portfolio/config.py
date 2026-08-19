@@ -14,6 +14,7 @@ that would make the fallback itself violate the guardrails it exists to satisfy.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -127,7 +128,15 @@ def _parse_profile(name: str, raw: object) -> ProfileConfig:
         raise PortfolioConfigError(f"profiles.{name}: expected a mapping")
 
     neutral = _parse_weight_map(raw.get("neutral"), f"profiles.{name}.neutral")
-    total = sum(neutral.values())
+    # `math.fsum`, not `sum`, and the difference is a CI failure rather than a
+    # rounding nicety. CPython 3.12 gave `sum` Neumaier compensation for floats;
+    # 3.11 sums naively. So `sum([0.60, 0.30, 0.10])` is exactly 1.0 on a
+    # developer's 3.13 and 0.9999999999999999 on the 3.11 the workflow pins —
+    # which made the division below a no-op locally and a perturbation in CI,
+    # turning the shipped 60/30/10 into 0.6000000000000001 and failing
+    # `test_balanced_neutral_is_the_backtest_benchmark` on that runner alone.
+    # `math.fsum` is exactly rounded on every version, so the two agree.
+    total = math.fsum(neutral.values())
     if abs(total - 1.0) > _SUM_TOLERANCE:
         raise PortfolioConfigError(f"profiles.{name}.neutral must sum to 1.0, got {total:.6f}")
     # A zero-weight asset in the neutral mix can never be allocated — the tilt is
