@@ -146,9 +146,23 @@ class TestTheQuarantine:
         names = [e.name for e in portfolio_engines(crypto_only_config, include_experimental=True)]
         assert names == ["crypto"]
 
-    def test_it_ships_disabled(self, config):
-        """The third gate. Flipping it is a deliberate act, not a merge."""
-        assert config.is_enabled("crypto") is False
+    def test_it_ships_enabled_for_publication_only(self, config):
+        """The former third gate, and what replaced it.
+
+        This flag used to be ``false`` and is now ``true``: the nightly run
+        computes crypto and writes its rows back, so the /crypto page reads real
+        numbers instead of a milestone placeholder. That is the *only* thing it
+        grants.
+
+        The second assertion is the one that matters: being enabled must not have
+        moved the engine any closer to an allocation.
+        ``test_the_portfolio_layer_excludes_it_by_default`` above is what proves
+        that end to end; this pins the flag it depends on, so a future edit that
+        drops ``experimental`` because "the engine is live now, surely it counts"
+        fails here as well as there.
+        """
+        assert config.is_enabled("crypto") is True
+        assert CryptoEngine.experimental is True
 
     def test_the_registry_knows_it_without_the_portfolio_layer_importing_it(self):
         """Discovery by name is what makes the import contract enforceable."""

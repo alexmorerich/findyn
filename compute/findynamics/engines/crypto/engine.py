@@ -53,10 +53,16 @@ Quarantine
 
 Nothing outside this package may import it (``01-target-architecture.md`` §3
 rule 5, enforced by the ``Crypto is quarantined`` contract in
-``compute/pyproject.toml``), the portfolio layer excludes it because
-``experimental`` is ``True``, and ``config/engines/crypto.yaml`` ships
-``enabled: false``. Three independent gates, because any one of them can be
+``compute/pyproject.toml``), and the portfolio layer excludes it because
+``experimental`` is ``True``. Two independent gates, because either one can be
 switched off by someone who has not read this docstring.
+
+There used to be a third — ``config/engines/crypto.yaml`` shipped
+``enabled: false`` — and it is now ``true``. That gate governed *publication*
+only: whether the nightly run computes this engine and writes its rows back so
+the /crypto page has something to read. It never governed influence. The two
+gates above are what keep this engine out of an allocation, and they are the
+ones to check before believing any number here matters to a weight.
 """
 
 from __future__ import annotations
