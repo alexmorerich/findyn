@@ -14,6 +14,7 @@ that would make the fallback itself violate the guardrails it exists to satisfy.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -127,7 +128,14 @@ def _parse_profile(name: str, raw: object) -> ProfileConfig:
         raise PortfolioConfigError(f"profiles.{name}: expected a mapping")
 
     neutral = _parse_weight_map(raw.get("neutral"), f"profiles.{name}.neutral")
-    total = sum(neutral.values())
+    # `math.fsum`, not `sum`: exactly-specified weights must survive the
+    # normalisation below unchanged. Builtin `sum` adds left to right, and
+    # 0.6 + 0.3 + 0.1 is 0.9999999999999999 that way, so the division would
+    # scale every weight by ~1 ULP and `balanced` would stop being the 60/30/10
+    # benchmark it is documented to be. CPython 3.12 gave `sum` compensated
+    # summation, which hides this on a new interpreter and leaves it on the
+    # 3.11 this project supports and CI pins.
+    total = math.fsum(neutral.values())
     if abs(total - 1.0) > _SUM_TOLERANCE:
         raise PortfolioConfigError(f"profiles.{name}.neutral must sum to 1.0, got {total:.6f}")
     # A zero-weight asset in the neutral mix can never be allocated — the tilt is
