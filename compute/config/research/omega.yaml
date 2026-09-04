@@ -5,3 +5,186 @@
 # docs/research/kk-omega-design.md.
 enabled: false
 experimental: true
+
+# Stamped onto every OmegaSpec. Bump it when a *definition* changes — a window,
+# a column set, the sign-pinning precedence — because a stored artifact is only
+# reproducible against the version that produced it. Recalibrating a threshold
+# inside an existing definition is not a version change; changing what Ω means
+# is.
+model_version: "omega-0.1.0"
+
+# --- The series Ω is built from -------------------------------------------
+#
+# Every id here is already declared in config/series.yaml. Adding a data
+# dependency is out of scope for this track (docs/research/kk-omega-design.md
+# §3); a role left blank simply drops the columns built from it, by the same
+# path a provider outage would take.
+#
+# The price is YAHOO:^GSPC rather than the engine's spliced publication path.
+# The splice exists so that FRED stays vendor-of-record for every date it
+# covers, which is a *publication* concern — this module publishes nothing, and
+# ^GSPC is the one record in the fixture that runs 1927-12-30 → 2026-07-30
+# without a join in the middle. A join in the middle of a research window is a
+# structural break the PCA would happily fit.
+series:
+  price:                "YAHOO:^GSPC"
+  dispersion_reference: "FRED:NASDAQ100"
+  rate_level:           "FRED:DGS10"
+  curve_slope:          "FRED:T10Y3M"
+  liquidity:            "FRED:NFCI"
+  # Thin: 2023-08-01 onward in the committed fixture, 787 observations against
+  # 6,649 for the rates columns. It is configured anyway, and the availability
+  # check below is what stops it deciding the start of the research window.
+  credit_spread:        "FRED:BAMLH0A0HYM2"
+
+features:
+  # The primary research window. 2000-01 is where the rates, curve and
+  # liquidity columns all begin in the fixture, so it is the widest span on
+  # which the full block is defined. Warm-up is computed from data *before*
+  # this date and then discarded, so no rolling window is short at the start.
+  #
+  # A wider window is a DIFFERENT SPECIFICATION, not a longer run of this one:
+  # back past 2000 only the four price-derived columns exist, which is what
+  # PriceOnlyOmegaEstimator is for, and it is reported as its own row.
+  start: "2000-01-01"
+
+  # Cadence of the price series, for every months→observations conversion
+  # below. Quoted as a frequency rather than as 252 so the number and the
+  # reason for it stay together (engines/equity/prices.py::PERIODS_PER_YEAR).
+  frequency: daily
+
+  # Which candidates to build. The full vocabulary is
+  # research/omega/domain.py::FEATURE_COLUMNS; naming a subset here is how a
+  # sensitivity run drops a column without editing Python.
+  columns:
+    - realized_vol
+    - vol_of_vol
+    - abs_return
+    - drawdown
+    - dispersion
+    - rate_level_chg
+    - curve_slope
+    - liquidity_stress
+    - credit_velocity
+
+  # One month of realized volatility — the conventional choice for a daily
+  # series, and short enough to move inside an episode rather than after it.
+  # The same default regime/design.py uses, and the same function computes it.
+  realized_vol_months: 1.0
+  # Three months of that series' own standard deviation. §3.2 asks for "63d
+  # window of 21d RV"; this is the outer window, via rii.py::vol_of_vol.
+  vol_of_vol_months: 3.0
+  # EWMA span for |log return|. One month, so the smoothed absolute return and
+  # the realized volatility describe the same stretch of tape by two routes —
+  # one an L1 measure, one an L2 one, and the gap between them is informative
+  # about tail shape in a way either alone is not.
+  abs_return_months: 1.0
+  # Rolling correlation window against the dispersion reference. Three months:
+  # one month of daily returns gives a correlation with a standard error near
+  # 0.2, which is noise, and a year cannot move inside a crisis.
+  dispersion_months: 3.0
+  # ...then differenced over one month. The LEVEL of the S&P/NASDAQ correlation
+  # is near-constant across decades; its movement is not.
+  dispersion_change_months: 1.0
+  # Yield and spread changes over one month. Long enough to clear the daily
+  # noise, short enough that a credit repricing is still inside the window.
+  rate_change_months: 1.0
+  credit_change_months: 1.0
+
+  # How long a released value may stand in for the current one. 21 calendar
+  # days because FRED:NFCI is weekly with a 13-day median publication lag in
+  # the fixture, so a fill shorter than ~20 days would blank the liquidity
+  # column on most dates. Longer than this is not a stale reading, it is a
+  # series that stopped publishing, and it must stop contributing.
+  max_staleness_days: 21
+
+  # The availability check (docs/research/kk-omega-design.md §3.1). BOTH apply.
+  # The absolute floor rejects a column that is short in any terms; the
+  # coverage fraction rejects one that is long enough on its own and still
+  # describes only a corner of the window. The HY OAS clears the first at 787
+  # rows and fails the second at 12% of the 2000-2026 window, which is the
+  # whole reason the second exists.
+  min_column_observations: 252
+  min_column_coverage: 0.60
+
+estimator:
+  # "pca" (the MVP, all surviving columns) or "pca_price_only" (the 1927
+  # specification, price-derived columns only). The HMM estimator is the
+  # planned second specification and is deliberately not built yet: a second
+  # estimator without a first out-of-sample result is speculation
+  # (docs/research/kk-omega-design.md §4).
+  name: pca
+
+  # THE SIGN-PINNING PRECEDENCE (design note §5). The loading on the first
+  # SURVIVING column in this list is forced non-negative; if it is negative the
+  # whole loading vector is negated, and the column used is recorded in
+  # OmegaSpec.sign_reference.
+  #
+  # This is an ordered list and not "the column with the largest absolute
+  # loading" on purpose. That alternative is itself unstable: two columns with
+  # near-equal loadings would hand the reference back and forth between
+  # walk-forward windows and reintroduce the sign flip through a side door —
+  # and a sign flip does not fail, it produces a Ω̇ spike train aligned to the
+  # refit calendar that reads exactly like a signal.
+  #
+  # realized_vol leads because it is the one column present in every
+  # specification including the price-only one, so the orientation of Ω means
+  # the same thing across all of them: Ω increases with market stress. That is
+  # a convention, not a finding, and the report says so wherever Ω's sign is
+  # interpreted.
+  sign_reference_precedence:
+    - realized_vol
+    - vol_of_vol
+    - abs_return
+    - drawdown
+    - credit_velocity
+    - liquidity_stress
+    - dispersion
+    - rate_level_chg
+    - curve_slope
+
+  # Two years of daily observations — the floor kalman.py uses to identify
+  # three variances, reused here for the same reason: below it, a covariance
+  # matrix over nine columns is estimated from too little to be a projection.
+  # Under this the estimator RAISES rather than returning a short Ω.
+  min_fit_observations: 504
+
+dynamics:
+  # Ω goes through the same local-linear-trend filter price goes through, so it
+  # inherits the same start-up problem and the same remedy. kinematics.py
+  # measured the untreated version on the century price path: the first
+  # published velocity was +142% annualized, and because the z-baseline is
+  # expanding, the transient widens it for every later date and never washes
+  # out. One year, expressed in years so the same number means 252 observations
+  # here and 12 on a monthly path.
+  kalman_burn_in_years: 1.0
+  # Reached-rather-than-converged is logged, not raised — a filtered path from
+  # slightly-off variances is far more useful than no state (kalman.py).
+  kalman_maxiter: 200
+  # Trailing standard deviation of Ω̇. Three months: the same span vol_of_vol
+  # uses, so "how fast is Ω moving" and "how unstable is the market" are
+  # measured over comparable stretches.
+  volatility_months: 3.0
+  # Expanding z-score baseline for Ω, minimum ten years — §8.3's rule for
+  # jerk_z, and the same function computes it. Degrades and reports itself on a
+  # shorter path rather than publishing a column of NaN.
+  zscore_min_years: 10.0
+
+regime:
+  # Bands on Ω's EXPANDING percentile (0-100), via the shared causal scorer
+  # factors/compute.py::score_series. Not a second regime model: three names
+  # over one continuous variable, with no transition matrix and no posterior.
+  #
+  # 60/85 rather than terciles. The distribution of a stress coordinate is not
+  # symmetric — most days are calm — so equal thirds would label a third of an
+  # ordinary decade "stress" and the word would stop meaning anything.
+  #
+  # Measured on the shipped configuration over 2000-2026, these put 68.5% of
+  # scored dates in latent_calm, 22.1% in latent_transition and 9.4% in
+  # latent_stress — about one day in eleven, and 2008-09 through 2008-12 and
+  # 2020-03 through 2020-04 are each over 80% latent_stress while 2017 is under
+  # 5%. That is an in-sample reading of a whole-record fit and so a sanity
+  # check, not a result; KK3 is what measures whether the banding predicts
+  # anything.
+  transition_percentile: 60.0
+  stress_percentile: 85.0

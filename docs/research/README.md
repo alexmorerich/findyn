@@ -13,13 +13,23 @@ physical fifth dimension. The hypothesis is falsifiable and is allowed to fail.
 
 ## Status
 
-**KK0 delivered.** The design note is pre-registered at
-[`kk-omega-design.md`](./kk-omega-design.md), the module scaffold exists under
-`compute/findynamics/research/omega/` with no model code in it, and the
-`Research is quarantined` import-linter contract is green and demonstrated to
-fail on a planted production import.
+**KK0 and KK1 delivered.** The design note is pre-registered at
+[`kk-omega-design.md`](./kk-omega-design.md), and the `Research is quarantined`
+import-linter contract is green and demonstrated to fail on a planted production
+import.
 
-KK1 is next: nothing computes an Ω value yet.
+Ω, Ω̇, Ω̈, `omega_volatility`, `omega_zscore` and `omega_regime` are computed
+from the committed fixture. On the shipped configuration the availability check
+drops `credit_velocity` (730 knowable rows, 11% of the window) and Ω is built
+from the remaining eight columns over 2000-02-03 → 2026-07-30; PC1 explains
+43.7% of their variance and the sign is pinned on `realized_vol`. The
+`pca_price_only` specification runs 1928-05-01 → 2026-07-30 on `YAHOO:^GSPC`.
+
+**Nothing here is a result.** Every number above comes from a whole-record fit
+and is therefore in-sample. KK3's walk-forward is the only thing that may
+produce a reported number.
+
+KK2 is next: the coupling `C` and the curvature `K`.
 
 ## Structure of the delivered module (target)
 
