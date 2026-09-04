@@ -50,6 +50,10 @@ dependencies = [
 # empty list here is a decision; no list at all is an invitation to add a
 # `web3` to the core deps because there was nowhere else to put it.
 crypto = []
+# KK-Ω research track. Empty on purpose, and kept rather than deleted — the first
+# dependency this module needs must have an obvious home that is not the core
+# dependency list.
+research = []
 dev = [
   "pytest>=8.3",
   "pytest-cov>=5.0",
@@ -97,6 +101,13 @@ root_package = "findynamics"
 name = "Layers"
 type = "layers"
 layers = [
+    # Research sits above everything, and the direction of that arrow is the
+    # whole point: a research module may read the engines it is testing against
+    # (that is what reusing the Kalman/FFD/HMM stack means), and nothing below
+    # may read it. The `Research is quarantined` contract below states the
+    # second half outright, because a layer rule permits a higher layer to be
+    # imported by nothing in particular and a quarantine has to be explicit.
+    "findynamics.research",
     "findynamics.portfolio",
     "findynamics.engines",
     "findynamics.factors | findynamics.data",
@@ -159,3 +170,27 @@ source_modules = [
     "findynamics.data",
 ]
 forbidden_modules = ["findynamics.engines.crypto"]
+
+# The same shape as the crypto quarantine above, and for the same reason. The
+# layers contract already forbids these five from reaching `findynamics.research`
+# — but a layer violation reports as "findynamics.portfolio is not allowed to
+# import findynamics.research", which reads like a stack ordering mistake that
+# could plausibly be fixed by moving a layer. It is not one. This module is
+# research: it publishes no AssetState, registers no engine, writes no D1 row,
+# and ships `enabled: false`. The named contract is what makes a violation
+# report as a quarantine breach, which is the thing the reviewer needs to know.
+#
+# The feature flag in config/research/omega.yaml is the *second* line of defence.
+# This is the first, because a flag can be flipped in a yaml edit and a contract
+# cannot be satisfied by one.
+[[tool.importlinter.contracts]]
+name = "Research is quarantined"
+type = "forbidden"
+source_modules = [
+    "findynamics.portfolio",
+    "findynamics.engines",
+    "findynamics.factors",
+    "findynamics.core",
+    "findynamics.data",
+]
+forbidden_modules = ["findynamics.research"]

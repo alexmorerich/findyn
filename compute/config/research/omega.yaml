@@ -1,0 +1,7 @@
+# KK-Ω — latent market-state research module. EXPERIMENTAL, RESEARCH ONLY.
+#
+# Disabled by default and quarantined by import-linter: no production path can
+# reach this module even if this flag is flipped. See
+# docs/research/kk-omega-design.md.
+enabled: false
+experimental: true
