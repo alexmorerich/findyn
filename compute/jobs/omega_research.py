@@ -36,12 +36,14 @@ from findynamics.research.omega import load_omega_config
 from findynamics.research.omega.backtest import walk_forward
 from findynamics.research.omega.evaluate import evaluate
 from findynamics.research.omega.lab import build_artifact, write_artifact
+from findynamics.research.omega.report import load_artifacts, render_report, write_report
 from jobs._common import configure_logging
 
 log = logging.getLogger("findynamics.jobs.omega_research")
 
 DEFAULT_SNAPSHOT = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "equity_prices.csv"
 DEFAULT_OUT = Path(__file__).resolve().parents[1] / "backtests" / "omega"
+DEFAULT_REPORT = Path(__file__).resolve().parents[2] / "docs" / "research" / "kk-omega-report.md"
 
 #: The Lab reads this file directly from the static site. It is a committed
 #: research artifact and deliberately not an API response — see
@@ -126,6 +128,38 @@ def run(
     return 0
 
 
+def regenerate_report(*, artifacts: Path, out: Path) -> int:
+    """Rewrite the KK5 report from the stored CSVs.
+
+    Reads only committed artifacts, so it needs neither the fixture nor a
+    two-minute walk-forward — which is what makes "regenerates byte-identically"
+    a check anyone can run rather than a claim.
+    """
+    frames = load_artifacts(artifacts)
+    windows = frames.get("windows")
+    model_version = "unknown"
+    if windows is not None and not windows.empty and "spec" in windows.columns:
+        import ast
+
+        spec = ast.literal_eval(str(windows["spec"].iloc[-1]))
+        model_version = str(spec.get("model_version", "unknown"))
+
+    body = render_report(
+        frames,
+        config_hash=_config_hash(),
+        model_version=model_version,
+    )
+    path = write_report(body, out)
+    log.info("omega research: regenerated %s from %s", path, artifacts)
+    return 0
+
+
+def _config_hash() -> str:
+    from findynamics.research.omega.backtest import config_hash
+
+    return config_hash(load_omega_config())
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
@@ -148,11 +182,28 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="the acceptance-gate control: permute every target and re-run",
     )
+    parser.add_argument(
+        "--report",
+        action="store_true",
+        help="regenerate docs/research/kk-omega-report.md from the stored CSVs and exit",
+    )
+    parser.add_argument(
+        "--report-out",
+        type=Path,
+        default=None,
+        help="where --report writes; defaults to docs/research/kk-omega-report.md",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
 
     configure_logging(verbose=args.verbose)
     print(BANNER, file=sys.stderr)
+
+    # --report reads committed artifacts and computes nothing, so it does not
+    # need the experimental gate: regenerating a document from files already in
+    # the repository is not running the research.
+    if args.report:
+        return regenerate_report(artifacts=args.out, out=args.report_out or DEFAULT_REPORT)
 
     config = load_omega_config()
     if not config.enabled and not args.force_experimental:

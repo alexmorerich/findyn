@@ -1,0 +1,9 @@
+,question,target,horizon,rank_ic,n
+0,Q4,forward_return,1,0.003209757483,4585
+1,Q4,forward_vol,1,,0
+2,Q4,forward_return,5,-0.03893548492,4581
+3,Q4,forward_vol,5,-0.002617916885,4581
+4,Q4,forward_return,21,-0.001375893755,4565
+5,Q4,forward_vol,21,-0.02259436957,4565
+6,Q4,forward_return,63,0.0170546228,4523
+7,Q4,forward_vol,63,-0.008831979669,4523
