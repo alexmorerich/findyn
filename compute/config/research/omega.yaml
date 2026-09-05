@@ -188,3 +188,119 @@ regime:
   # anything.
   transition_percentile: 60.0
   stress_percentile: 85.0
+
+coupling:
+  # Which estimator KK3 treats as C. The regression is the one the report will
+  # quote: it is the only one of the three that comes with a standard error,
+  # and a beta with no standard error is not a finding.
+  primary: regression
+  # Which regression specification C is read off. Both are fitted and both are
+  # reported; this only chooses which one is published as the coupling.
+  #   velocity:     v_t = b0 + b1*Wdot_t + b2*W_t + e
+  #   acceleration: a_t = b0 + b1*Wdot_t + b2*Wddot_t + b3*W_t + e
+  specification: velocity
+
+  # --- The ratio estimator's safeguards --------------------------------------
+  #
+  # dOmega passes through zero constantly, so the denominator carries a floor.
+  # A PERCENTILE of |dOmega| over the expanding history, not a constant: Omega's
+  # scale depends on which columns survived the availability check and on the
+  # window the projection was fitted over, so a constant would mean a different
+  # thing in every walk-forward window.
+  #
+  # At the 25th percentile roughly a quarter of observations are undefined BY
+  # CONSTRUCTION. That is the design, not a failure — below the floor the
+  # estimator emits NaN and never 0, because zero is a claim about the coupling
+  # and absence is not one.
+  denominator_percentile: 25.0
+
+  # Expanding winsorization bounds, in percent. THIS CAN DESTROY THE SIGNAL IT
+  # IS PROTECTING: if the coupling's information lives in its extremes — which
+  # is exactly what a regime-transition story would predict — clipping removes
+  # it. There is no way to have both, so the winsorized share is published
+  # beside the series and KK5 is required to show the sensitivity.
+  winsor_lower: 1.0
+  winsor_upper: 99.0
+
+  # Above this share of undefined observations the ratio estimator declines
+  # rather than publishing a mostly-NaN column. Set well above the 25% the
+  # floor produces by design: this ceiling is about pathology — an Omega that
+  # barely moves at all — not about the floor.
+  max_undefined_share: 0.50
+
+  # --- The regression estimator ----------------------------------------------
+  #
+  # Two years of daily observations before any coefficient is published, the
+  # same floor kalman.py uses to identify three variances and the estimator
+  # uses to fit a projection. Below it the coefficients exist and mean nothing.
+  min_observations: 504
+
+  # Newey-West lag. Absent means the floor(4*(n/100)^0.25) rule, which is 11 at
+  # the full 6,600-observation window and 5 at the 504 floor. Both regressors
+  # are persistent and plain OLS standard errors on persistent regressors are
+  # optimistic by a factor of several, so an OLS t-stat here would not be a
+  # weaker answer, it would be the wrong one.
+  # newey_west_lag: 11
+
+  # Observations between Newey-West evaluations. An exact daily path is O(n^2)
+  # in the sample length, because the residuals are refitted at every date, and
+  # the quantity moves on the scale of months. 21 is one trading month; the
+  # last date is always evaluated because that is the one the report quotes.
+  # Between evaluations the t-stat is NaN and is NOT forward-filled — a chart of
+  # a forward-filled significance reading implies a test was run on a day it
+  # was not.
+  tstat_cadence: 21
+
+  # Reciprocal-condition ceiling on the Gram matrix. Omega and Omega-dot are
+  # strongly related early in a window, and a solve through a badly conditioned
+  # matrix does not raise — it returns enormous coefficients that look like a
+  # finding. Rows above this are masked out instead.
+  max_condition: 1.0e10
+
+  # Baseline for the interaction control's expanding z-scores. Ten years, the
+  # same rule jerk_z is held to.
+  zscore_min_years: 10.0
+
+curvature:
+  # "equal" or "fitted". THERE IS NO THIRD MODE, and adding one is a lookahead
+  # decision rather than a configuration one.
+  #
+  # equal:  w_i = 1/5. A real choice, not a placeholder, for the reason
+  #         rii.py::DEFAULT_WEIGHTS gives — nothing in the record justifies
+  #         asserting that one instability term leads another by a factor of
+  #         1.4, and a weight vector fitted on eight episodes is fitted on eight
+  #         observations.
+  # fitted: the magnitudes of PC1 over the FIRST fit_observations complete rows
+  #         only, frozen for the whole path thereafter. Unsupervised, so there
+  #         is no target to leak.
+  weights: equal
+
+  # Complete rows the fitted mode estimates over, counted from the START of the
+  # sample. The first N rows and not a fraction of it, precisely so that
+  # appending later data cannot move the window — which is the property the KK2
+  # test asserts. 1260 is five years of daily observations.
+  fit_observations: 1260
+
+  # Expanding z-score baseline for every term, in years. Ten, the same rule
+  # jerk_z is held to, computed by the same function.
+  zscore_min_years: 10.0
+
+  # A term with fewer scored rows than this is dropped and NAMED, never
+  # zero-filled: zero on an instability axis means "maximally stable", which is
+  # a much stronger claim than "we could not measure it" (rii.py's rule).
+  min_term_observations: 252
+
+  # Share of the total weight that must be present on a date for K to be
+  # published there. THIS IS A DELIBERATE DEPARTURE FROM rii.py, which
+  # renormalizes per date with no floor because its seven components warm up
+  # within months of each other. K's do not: the price terms come off a record
+  # starting 1927 and the Omega terms off one starting 2000, so with no floor
+  # the largest reading in the whole series is 1987-10-19 — computed from
+  # `acceleration` and `jerk` alone, with nothing in the output saying so.
+  #
+  # The cost is real and belongs in the report: every term is scored against a
+  # ten-year expanding baseline, so on a 2000-start Omega the composite does
+  # not begin until roughly 2010 and 2008 IS OUTSIDE IT. Shortening
+  # zscore_min_years reaches further back on a noisier scale; that is a KK5
+  # sensitivity, not a default.
+  min_coverage: 0.999

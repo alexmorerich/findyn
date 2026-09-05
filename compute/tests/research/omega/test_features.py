@@ -88,10 +88,11 @@ def test_the_thin_credit_column_is_dropped_and_named(omega_config, omega_observa
     """The finding the whole availability check exists for.
 
     ``FRED:BAMLH0A0HYM2`` starts 2023-08-01 in the committed fixture. Over the
-    2000-2026 primary window it covers 730 of 6,683 rows — 11% — so it is
-    dropped. The number that matters is what happens without the check: a plain
-    ``dropna()`` over all nine columns leaves **730 rows starting 2023-08-31**,
-    an Ω with no 2008 and no 2020 in it, and nothing anywhere saying so.
+    2000-2026 primary window it covers 730 of 6,683 rows — 10.9% — so it is
+    dropped, leaving 6,595 complete rows over the eight survivors. The number
+    that matters is what happens without the check: a plain ``dropna()`` over
+    all nine columns leaves **664 rows starting 2023-08-31**, an Ω with no 2008
+    and no 2020 in it, and nothing anywhere saying so.
     """
     frame = build_feature_frame(accessor_at(omega_observations), omega_config)
     params = FeatureParams.from_config(omega_config)
@@ -106,9 +107,9 @@ def test_the_thin_credit_column_is_dropped_and_named(omega_config, omega_observa
 
     naive = frame.dropna()
     kept = frame[list(surviving)].dropna()
-    assert len(naive) < 1000
+    assert len(naive) == 664
     assert naive.index[0].year == 2023
-    assert len(kept) > 6000
+    assert len(kept) == 6_595
     assert kept.index[0].year == 2000
 
 

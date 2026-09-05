@@ -55,6 +55,27 @@ from findynamics.research.omega.config import (
     load_omega_config,
 )
 from findynamics.research.omega.contracts import OmegaContractError, OmegaPath, OmegaSpec
+from findynamics.research.omega.coupling import (
+    CouplingParams,
+    CouplingResult,
+    OmegaCouplingError,
+    all_couplings,
+    newey_west_lag,
+    primary_coupling,
+)
+from findynamics.research.omega.curvature import (
+    CURVATURE_TERMS,
+    CurvatureParams,
+    CurvatureResult,
+    OmegaCurvatureError,
+    financial_curvature,
+)
+from findynamics.research.omega.diagnostics import (
+    DiagnosticsInput,
+    EquityReference,
+    equity_reference,
+    render_report,
+)
 from findynamics.research.omega.domain import (
     FEATURE_COLUMNS,
     OMEGA_REGIME_CODES,
@@ -162,6 +183,66 @@ class OmegaEngine:
             config=self.config,
         )
 
+    def analyze(
+        self,
+        accessor: PITAccessor,
+        *,
+        reference: EquityReference | None = None,
+        with_reference: bool = True,
+    ) -> DiagnosticsInput:
+        """Everything the diagnostics report needs, from one information set.
+
+        Runs Ω, then the three coupling estimators, then the curvature
+        composite, then — unless told otherwise — the equity engine's own stack
+        so the redundancy panel compares against what the engine really ships.
+
+        ``with_reference=False`` skips that last part. It is the expensive step
+        (a Kalman MLE, an FFD search and an HMM fit, about ten seconds) and a
+        test that only cares about the coupling panel should not pay for it.
+
+        **In-sample**, like :meth:`fit_transform` and for the same reason. This
+        assembles a description of the construction, not a result.
+        """
+        path = self.fit_transform(accessor)
+        features = FeatureParams.from_config(self.config)
+        resolved = reference
+        if resolved is None and with_reference:
+            resolved = equity_reference(accessor)
+
+        if resolved is None:
+            raise OmegaCouplingError(
+                "the coupling estimators need the engine's velocity and acceleration; "
+                "pass a reference or leave with_reference on"
+            )
+
+        coupling_params = CouplingParams.from_config(self.config)
+        couplings = all_couplings(
+            resolved.features.frame["velocity"],
+            resolved.features.frame["acceleration"],
+            path.omega,
+            path.omega_velocity,
+            path.omega_acceleration,
+            params=coupling_params,
+            periods_per_year=features.periods_per_year,
+        )
+        curvature = financial_curvature(
+            {
+                "acceleration": resolved.features.frame["acceleration"],
+                "jerk": resolved.features.frame["jerk_z"],
+                "omega_velocity": path.omega_velocity,
+                "omega_acceleration": path.omega_acceleration,
+                "coupling": primary_coupling(couplings, coupling_params),
+            },
+            params=CurvatureParams.from_config(self.config),
+            periods_per_year=features.periods_per_year,
+        )
+        return DiagnosticsInput(
+            path=path,
+            couplings=couplings,
+            curvature=curvature,
+            reference=resolved if with_reference else None,
+        )
+
     def diagnostics(self, path: OmegaPath) -> dict[str, float]:
         """Everything a panel needs about one path, flattened to floats.
 
@@ -179,18 +260,27 @@ class OmegaEngine:
 
 
 __all__ = [
+    "CURVATURE_TERMS",
     "DEFAULT_SEED",
     "FEATURE_COLUMNS",
     "OMEGA_CONFIG_PATH",
     "OMEGA_REGIMES",
     "OMEGA_REGIME_CODES",
     "PRICE_DERIVED_COLUMNS",
+    "CouplingParams",
+    "CouplingResult",
+    "CurvatureParams",
+    "CurvatureResult",
+    "DiagnosticsInput",
     "DynamicsParams",
+    "EquityReference",
     "EstimatorParams",
     "FeatureParams",
     "OmegaConfig",
     "OmegaConfigError",
     "OmegaContractError",
+    "OmegaCouplingError",
+    "OmegaCurvatureError",
     "OmegaDynamicsError",
     "OmegaEngine",
     "OmegaEstimator",
@@ -200,12 +290,18 @@ __all__ = [
     "OmegaSpec",
     "PCAOmegaEstimator",
     "PriceOnlyOmegaEstimator",
+    "all_couplings",
     "available_columns",
     "build_estimator",
     "build_feature_frame",
+    "equity_reference",
+    "financial_curvature",
     "get_omega_config",
     "is_enabled",
     "load_omega_config",
+    "newey_west_lag",
     "omega_dynamics",
     "omega_regime",
+    "primary_coupling",
+    "render_report",
 ]

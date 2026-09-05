@@ -26,7 +26,10 @@ import textwrap
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
+from findynamics.research.omega import OmegaEngine
+from findynamics.research.omega.diagnostics import equity_reference
 from tests.research.omega.conftest import SNAPSHOT_AS_OF, accessor_at
 
 COMPUTE_ROOT = Path(__file__).resolve().parents[3]
@@ -139,3 +142,84 @@ def test_no_wall_clock_reaches_the_spec(omega_engine, omega_observations):
     }
     for key in ("fitted_at", "created_at", "timestamp", "run_id"):
         assert key not in document
+
+
+@pytest.mark.slow
+def test_the_coupling_and_curvature_paths_are_byte_identical_across_processes(
+    omega_observations,
+):
+    """The KK2 half of the determinism story.
+
+    ``C`` comes out of a closed-form solve over ``np.cumsum`` running totals and
+    ``K`` out of a PCA in ``fitted`` mode, so both touch the reductions that put
+    the ~1e-9 wobble into the HMM (issue #6). A subprocess gets a cold thread
+    pool and re-reads the fixture from disk, so a path that depended on either
+    would disagree with the one computed here.
+    """
+    engine = OmegaEngine.from_shipped_config()
+    data = engine.analyze(accessor_at(omega_observations))
+    here = _serialize_paths(data)
+
+    program = textwrap.dedent(
+        f"""
+        import pandas as pd
+        from datetime import date
+        from findynamics.data.accessor import PandasPITAccessor
+        from findynamics.research.omega import OmegaEngine
+        from tests.research.omega.test_determinism import _serialize_paths
+
+        frame = pd.read_csv("tests/fixtures/equity_prices.csv")
+        for column in ("obs_date", "release_date", "revision_date"):
+            frame[column] = pd.to_datetime(frame[column])
+
+        engine = OmegaEngine.from_shipped_config()
+        accessor = PandasPITAccessor(frame, date({SNAPSHOT_AS_OF.year},
+                                                 {SNAPSHOT_AS_OF.month},
+                                                 {SNAPSHOT_AS_OF.day}))
+        print(_serialize_paths(engine.analyze(accessor)), end="")
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", program],
+        cwd=COMPUTE_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout == here, result.stderr
+
+
+def _serialize_paths(data) -> str:
+    """Every published KK2 series as one CSV blob — what an artifact would hold."""
+    frame = pd.DataFrame(
+        {
+            "omega": data.path.omega,
+            "coupling_ratio": data.couplings["ratio"].coupling,
+            "coupling_regression": data.couplings["regression"].coupling,
+            "coupling_interaction": data.couplings["interaction"].coupling,
+            "curvature": data.curvature.curvature,
+            "curvature_percentile": data.curvature.percentile,
+        }
+    )
+    return frame.to_csv(float_format="%.17g")
+
+
+def test_the_curvature_weights_are_stable_across_two_fits(omega_observations, omega_config):
+    """``fitted`` mode twice on one information set, to the last bit.
+
+    The PCA behind the weighting is the same BLAS-parallel SVD the Ω estimator
+    pins its thread pool for, and the weights travel in the artifact.
+    """
+    from tests.research.omega.conftest import with_params
+
+    engine = OmegaEngine(config=with_params(omega_config, curvature={"weights": "fitted"}))
+    accessor = accessor_at(omega_observations)
+    reference = equity_reference(accessor)
+
+    first = engine.analyze(accessor, reference=reference).curvature
+    second = engine.analyze(accessor, reference=reference).curvature
+
+    assert first.weights == second.weights
+    assert (first.fit_start, first.fit_end) == (second.fit_start, second.fit_end)
+    pd.testing.assert_series_equal(first.curvature, second.curvature, check_exact=True)

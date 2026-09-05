@@ -13,23 +13,37 @@ physical fifth dimension. The hypothesis is falsifiable and is allowed to fail.
 
 ## Status
 
-**KK0 and KK1 delivered.** The design note is pre-registered at
-[`kk-omega-design.md`](./kk-omega-design.md), and the `Research is quarantined`
+**KK0, KK1 and KK2 delivered.** The design note is pre-registered at
+[`kk-omega-design.md`](./kk-omega-design.md); the `Research is quarantined`
 import-linter contract is green and demonstrated to fail on a planted production
-import.
+import. The current in-sample diagnostics are at
+[`kk-omega-diagnostics.md`](./kk-omega-diagnostics.md).
 
-Ω, Ω̇, Ω̈, `omega_volatility`, `omega_zscore` and `omega_regime` are computed
-from the committed fixture. On the shipped configuration the availability check
-drops `credit_velocity` (730 knowable rows, 11% of the window) and Ω is built
-from the remaining eight columns over 2000-02-03 → 2026-07-30; PC1 explains
-43.7% of their variance and the sign is pinned on `realized_vol`. The
-`pca_price_only` specification runs 1928-05-01 → 2026-07-30 on `YAHOO:^GSPC`.
+Ω, Ω̇, Ω̈, three coupling estimators and the curvature composite `K` are computed
+from the committed fixture:
 
-**Nothing here is a result.** Every number above comes from a whole-record fit
-and is therefore in-sample. KK3's walk-forward is the only thing that may
-produce a reported number.
+| Quantity | Span on the shipped config | Note |
+|---|---|---|
+| Ω | 2000-02-03 → 2026-07-30 | 8 columns; `credit_velocity` dropped at 10.9% coverage; PC1 explains 43.7% |
+| `C` (regression) | 2003-02-07 → 2026-07-29 | β1 on Ω̇, Newey–West t = +2.36 on the velocity specification |
+| `K` | 2013-02-11 → 2026-07-29 | five terms, equal weights — **2008 is outside it**, see below |
 
-KK2 is next: the coupling `C` and the curvature `K`.
+**Nothing here is a result.** Every number is from a whole-record fit and is
+therefore in-sample. KK3's walk-forward is the only thing that may report one.
+
+### Two findings KK3 has to carry
+
+1. **No latent quantity is a re-derivation of what the engine publishes.** The
+   largest rank correlation against any published quantity is `K` vs `rii_jerk`
+   at +0.72; `K` vs the RII composite is **+0.42**, well below the 0.9
+   redundancy threshold. That is a statement about redundancy, not usefulness.
+2. **`K` reaches back only to 2013 under the shipped defaults**, because the
+   coupling term warms up twice — 504 observations of expanding regression, then
+   a ten-year expanding z-baseline on top. Shortening
+   `curvature.zscore_min_years` to 5.0 moves the start to 2008-02 and to 3.0
+   moves it to 2006-02. That is a KK3/KK5 decision, deliberately not taken here.
+
+KK3 is next: the walk-forward comparison of arms A / A′ / B / C / D / E.
 
 ## Structure of the delivered module (target)
 
