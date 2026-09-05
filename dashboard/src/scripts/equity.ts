@@ -54,7 +54,8 @@ import {
   table,
 } from '../lib/dom';
 import { formatCount, formatDate, formatValue, type Tone } from '../lib/format';
-import { clearLab, labDataFrom, renderLab, setLabHosts } from './equity-lab';
+import { clearLab, labDataFrom, renderLab, setLabHosts, setOmegaPanels } from './equity-lab';
+import { describeSpec, loadOmega, omegaPanels, type OmegaArtifact } from '../lib/omega';
 import {
   DEFAULT_RANGE,
   RANGES,
@@ -1886,6 +1887,76 @@ function sameRange(a: RangeSpec, b: RangeSpec): boolean {
   return a.key === b.key && a.from === b.from && a.to === b.to;
 }
 
+/**
+ * Load the KK-Ω research artifact and install its panels, if the flag is on.
+ *
+ * Gated on `PUBLIC_OMEGA_LAB` at build time, so with the flag unset this
+ * function is the only trace of the research track on the page and it returns
+ * immediately without a fetch. Everything it touches degrades to nothing:
+ * a missing artifact, a stale one, a malformed one — the section stays hidden
+ * and the four kinematic panels render exactly as they did before.
+ */
+async function mountOmegaLab(): Promise<void> {
+  if (!import.meta.env.PUBLIC_OMEGA_LAB) return;
+  const host = document.getElementById('omega-lab');
+  if (!host) return;
+
+  const artifact = await loadOmega();
+  if (!artifact) {
+    // Absent is the normal state of a clone that has not run the research job.
+    // The section stays hidden rather than showing an error: there is nothing
+    // for a reader to do about it.
+    host.setAttribute('hidden', '');
+    return;
+  }
+
+  setOmegaPanels(omegaPanels(artifact));
+  host.removeAttribute('hidden');
+  renderOmegaDefinitions(artifact);
+}
+
+/**
+ * The definitions block, rendered from the artifact rather than from prose.
+ *
+ * Which columns Ω actually used, which were dropped, and what the pre-registered
+ * questions came back as — read out of the file, so the page cannot disagree
+ * with the run that produced it. The verdicts print whatever they say.
+ */
+function renderOmegaDefinitions(artifact: OmegaArtifact): void {
+  const verdicts = Object.entries(artifact.verdicts)
+    .map(([question, verdict]) => `<li><strong>${question}</strong> &mdash; ${verdict}</li>`)
+    .join('');
+  const loadings = Object.entries(artifact.spec.loadings)
+    .map(([column, value]) => `<li><code>${column}</code> ${value >= 0 ? '+' : ''}${value.toFixed(3)}</li>`)
+    .join('');
+
+  const block = document.getElementById('omega-definitions');
+  if (!block) return;
+  block.innerHTML = `
+    <p class="prose"><strong>&Omega;</strong> is a latent market-state coordinate: the first
+    principal component of a standardized block of causal transforms of series the engine already
+    ingests. It is <em>inferred</em>, never observed. ${describeSpec(artifact.spec)}
+    PC1 explains ${(artifact.spec.explained_variance_ratio * 100).toFixed(1)}% of that block's
+    variance over ${artifact.spec.fit_start} to ${artifact.spec.fit_end}.</p>
+    <p class="prose"><strong>Sign convention.</strong> The loading on
+    <code>${artifact.spec.sign_reference}</code> is forced non-negative, so &Omega; increases with
+    market stress <em>by construction</em>. That is a convention, not a finding.</p>
+    <ul class="prose">${loadings}</ul>
+    <p class="prose"><strong>C &asymp; &part;&sup2;P/&part;t&part;&Omega;</strong> is the coupling:
+    the expanding-window regression coefficient of price velocity on &Omega;&#775;. It is undefined
+    wherever |&Delta;&Omega;| fell below its denominator floor, and those dates are drawn as gaps
+    &mdash; the estimator declining to publish, not gaps in the market.</p>
+    <p class="prose"><strong>K</strong> is a documented instability composite,
+    <code>K = w&#8321;Z(|a|) + w&#8322;Z(|j|) + w&#8323;Z(|&Omega;&#775;|) + w&#8324;Z(|&Omega;&#776;|) + w&#8325;Z(|C|)</code>,
+    with <strong>equal weights by rule</strong> &mdash; not fitted. It is not Riemann curvature; the
+    word is a label on a composite.</p>
+    <p class="prose"><strong>Pre-registered verdicts</strong> (model <code>${artifact.model_version}</code>,
+    config <code>${artifact.config_hash}</code>, information set ${artifact.generated}):</p>
+    <ul class="prose">${verdicts}</ul>
+    <p class="prose"><small>${artifact.disclaimer}</small></p>
+  `;
+}
+
 async function main(): Promise<void> {
   let current = rangeFromUrl();
 
@@ -1899,6 +1970,7 @@ async function main(): Promise<void> {
 
   renderRangeControl(current, select);
   await load(current);
+  await mountOmegaLab();
 }
 
 void main();

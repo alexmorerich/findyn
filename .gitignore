@@ -48,3 +48,11 @@ compute/.cache/
 .DS_Store
 .idea/
 .vscode/
+
+# KK-Ω walk-forward raw paths. Regenerated in ~2 minutes by
+# `python -m jobs.omega_research --force-experimental`; the *results* those
+# three are summarised into are committed beside them. Ten megabytes of stitched
+# path is a build product, not a record.
+compute/backtests/omega/panel.csv
+compute/backtests/omega/predictions.csv
+compute/backtests/omega/training_means.csv

@@ -1,5 +1,15 @@
 ---
 import Base from '../layouts/Base.astro';
+
+/**
+ * The KK-Ω research section is gated at BUILD time, not hidden with CSS.
+ *
+ * With `PUBLIC_OMEGA_LAB` unset the markup below is not emitted at all, so the
+ * built page is byte-identical to the one that shipped before the research
+ * track existed. That is the property the phase report asserts with a diff, and
+ * it is why this is an `astro` conditional rather than a `hidden` attribute.
+ */
+const omegaLab = Boolean(import.meta.env.PUBLIC_OMEGA_LAB);
 ---
 
 <Base
@@ -40,6 +50,37 @@ import Base from '../layouts/Base.astro';
     <div id="lab-toolbar" style="margin-top:0.85rem"></div>
     <div id="lab-chart" style="margin-top:0.75rem"></div>
   </section>
+
+  {
+    omegaLab && (
+      <section class="panel panel--lab" id="omega-lab" aria-labelledby="omega-h" hidden>
+        {/* Persistent and first inside the section: a reader must not be able to
+            reach a number here without having passed the banner. Same rule and
+            same component as the crypto page (04-ui-plan.md §P5). */}
+        <aside class="expbanner" role="note" aria-label="Experimental research panels">
+          <span class="expbanner__tag">Experimental &mdash; research only</span>
+          <p class="expbanner__text">
+            These series are a research hypothesis under test. They are <strong>not part of any
+            published state, regime or allocation</strong>, and <strong>no causal relationship is
+            implied</strong> by their alignment on the time axis with the panels above.
+          </p>
+        </aside>
+        <div class="panel__head">
+          <h2 id="omega-h">Latent-state panels</h2>
+          <span class="panel__note">&Omega; &middot; &Omega;&#775; &middot; &Omega;&#776; &middot; C &middot; K</span>
+        </div>
+        <p class="prose">
+          A fifth-dimensional latent-state representation inspired by Kaluza&ndash;Klein geometry,
+          tested as a quantitative modelling hypothesis. These five panels share the x-axis, zoom
+          and crosshair of the four above &mdash; that synchronization is the entire point, because
+          the only question this section can answer is whether latent motion and price motion line
+          up in time. It cannot answer whether one causes the other, and nothing here should be
+          read as saying so.
+        </p>
+        <div id="omega-definitions" style="margin-top:0.85rem" />
+      </section>
+    )
+  }
 
   <section class="panel" aria-labelledby="lab-regime-h">
     <div class="panel__head">

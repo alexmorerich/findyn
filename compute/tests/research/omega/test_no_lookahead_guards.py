@@ -57,22 +57,23 @@ The three additions, and what each one protects
     fires on legitimate causal code, narrow the **pattern** and say so in the
     phase report. Deleting it is not the fix.
 
-The pressure point KK3 will reach, decided now
-----------------------------------------------
+The pressure point, decided in KK0 and reached in KK3
+-----------------------------------------------------
 
 KK3 grades arms against forward returns ``r_{t+h}`` and forward realized
 volatility ``σ_{t+h}``. Building a **target** by looking forward is legitimate
 and unavoidable — you cannot grade a call without knowing what happened next —
 and the obvious way to write it is ``.shift(-h)``, which the fifth pattern bans.
 
-The resolution is fixed here, before there is a failing test creating pressure
-to reach for the easy fix. ``§14.1`` rule 3 bans centred and forward-looking
-constructions **in the feature path**; the label path is a different path. So
-label construction is confined to modules named in :data:`TARGET_MODULES`,
-which is empty today and which KK3 extends by one entry with a comment naming
-the function that needs it. That is a visible, reviewable act. Loosening a
-pattern so that a target stops tripping it is not: it would exempt the feature
-path at the same time, silently, and the guard would go on passing.
+The resolution was fixed in KK0, before there was a failing test creating
+pressure to reach for the easy fix, and KK3 used it as written. ``§14.1`` rule 3
+bans centred and forward-looking constructions **in the feature path**; the
+label path is a different path. So label construction is confined to modules
+named in :data:`TARGET_MODULES` — one entry, ``omega/targets.py``, added with a
+comment naming the four functions that need it. That is a visible, reviewable
+act. Loosening a pattern so that a target stops tripping it is not: it would
+exempt the feature path at the same time, silently, and the guard would go on
+passing.
 
 The exemption is **per pattern, not per file**, and only
 :data:`TARGET_EXEMPT` is exemptable. A module that builds labels has a reason
@@ -94,9 +95,15 @@ import pytest
 RESEARCH_ROOT = Path(__file__).resolve().parents[3] / "findynamics" / "research"
 
 #: Modules permitted to construct forward-looking **labels**, as paths relative
-#: to :data:`RESEARCH_ROOT`. Empty in KK0 because nothing builds a target yet.
-#: A phase that adds one names the module *and the function*, here, in a comment.
-TARGET_MODULES: frozenset[str] = frozenset()
+#: to :data:`RESEARCH_ROOT`. A phase that adds one names the module *and the
+#: functions*, here, in a comment.
+#:
+#: ``omega/targets.py`` (KK3) builds the four things the walk-forward grades
+#: against: ``forward_return``, ``forward_volatility``, ``forward_drawdown`` and
+#: ``transition_within``. Each looks forward by construction — grading a call
+#: without knowing what happened next is not possible — and each is confined to
+#: that file so the exemption stays one line wide.
+TARGET_MODULES: frozenset[str] = frozenset({"omega/targets.py"})
 
 #: The only patterns :data:`TARGET_MODULES` may trip. Building a label requires
 #: looking forward; it does not require any of the other seven, so they stay

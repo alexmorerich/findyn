@@ -190,6 +190,20 @@ let hosts: LabHosts = { chart: null, regime: null, events: null, debug: null, to
 let selectedEvent: MarketEvent | null = null;
 let viewport: readonly [number, number] | null = null;
 
+/**
+ * The KK-Ω research panels, appended to the stack when the artifact loads.
+ *
+ * Held here rather than rendered by a second chart, and that is the whole
+ * design: the question the section exists to look at is the *temporal*
+ * relationship between price dynamics and latent dynamics, which needs one
+ * x-axis, one zoom and one crosshair. Two charts side by side would answer a
+ * different and much weaker question.
+ *
+ * Empty unless `PUBLIC_OMEGA_LAB` is set and the artifact loaded, so with the
+ * flag off `panelsFor` returns exactly what it returned before.
+ */
+let omegaPanels: PanelSpec[] = [];
+
 // ----------------------------------------------------------------- panels
 
 function panelsFor(data: LabData): PanelSpec[] {
@@ -250,7 +264,21 @@ function panelsFor(data: LabData): PanelSpec[] {
       zeroLine: true,
       bands: [JERK_ELEVATED, JERK_EXTREME],
     },
+    ...omegaPanels,
   ];
+}
+
+/**
+ * Install the research panels and redraw.
+ *
+ * Called once, after the artifact loads, by the page entry point — and only
+ * when `PUBLIC_OMEGA_LAB` is set. Redraws immediately if the Lab has already
+ * rendered, because the artifact is a separate fetch and will usually land
+ * after the API data.
+ */
+export function setOmegaPanels(panels: PanelSpec[]): void {
+  omegaPanels = panels;
+  if (current) renderLab(current);
 }
 
 /**

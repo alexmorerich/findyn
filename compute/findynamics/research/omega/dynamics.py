@@ -75,7 +75,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from findynamics.engines.equity.features.kalman import filter_state
+from findynamics.engines.equity.features.kalman import KalmanParams, filter_state
 from findynamics.engines.equity.features.kinematics import (
     baseline_window,
     burn_in_window,
@@ -173,12 +173,21 @@ def omega_dynamics(
     *,
     periods_per_year: float,
     config: OmegaConfig,
+    kalman_params: KalmanParams | None = None,
 ) -> OmegaPath:
     """The full :class:`OmegaPath` for one stitched causal Ω path.
 
     ``omega`` is the *stitched* out-of-sample path from the walk-forward, not a
     single window's transform: derivatives taken per window would restart at
     every refit boundary and put a discontinuity where the model has none.
+
+    ``kalman_params`` frozen from an earlier window makes Ω̇ a **pure forward
+    recursion**, so its value at *t* depends on ``Ω[0..t]`` and nothing after.
+    Left as ``None`` the variances are re-estimated by maximum likelihood on the
+    whole path handed in, which is correct expanding-window behaviour for a
+    whole-history diagnostic and is *not* good enough for the walk-forward: an
+    MLE that saw 2026 would be in every 2008 slope. KK3 always passes them;
+    :meth:`OmegaEngine.fit_transform` deliberately does not, and says so.
     """
     params = DynamicsParams.from_config(config)
 
@@ -188,7 +197,7 @@ def omega_dynamics(
             f"Ω has {len(clean)} finite value(s); a filtered slope needs at least two"
         )
 
-    state = filter_state(clean, maxiter=params.kalman_maxiter, label="omega")
+    state = filter_state(clean, kalman_params, maxiter=params.kalman_maxiter, label="omega")
 
     burn_in, burn_in_is_short = burn_in_window(
         len(state.slope), periods_per_year, years=params.kalman_burn_in_years

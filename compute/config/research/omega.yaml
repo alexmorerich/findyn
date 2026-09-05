@@ -304,3 +304,53 @@ curvature:
   # zscore_min_years reaches further back on a noisier scale; that is a KK5
   # sensitivity, not a default.
   min_coverage: 0.999
+
+walk_forward:
+  # Rebalance cadence in months. The Omega spec is refit at each one and applied
+  # forward only, so this is also the length of every out-of-sample block.
+  cadence_months: 1
+
+  # Warm-up, discarded ENTIRELY rather than run on a short window: an Omega
+  # fitted on 200 observations is a statement about its own start-up, exactly as
+  # kalman_burn_in_years is for velocity. Five years from the first date of the
+  # research window.
+  min_train_years: 5.0
+
+  # Forecast horizons in trading days: one day, one week, one month, one
+  # quarter. Every question is answered at all four, and the multiplicity
+  # adjustment is taken over the whole family.
+  horizons: [1, 5, 21, 63]
+
+  # Ridge strengths searched on an inner EXPANDING split of the first training
+  # window, then frozen. Expanding and not k-fold: a random fold would train on
+  # data after the rows it scores, which is the leak this module exists to
+  # avoid, hidden inside the model selection where it is least visible.
+  ridge_alphas: [0.1, 1.0, 10.0, 100.0, 1000.0]
+  logistic_c: [0.01, 0.1, 1.0]
+  inner_splits: 3
+
+  # Transaction cost per unit turnover, in basis points. Reported alongside the
+  # BREAK-EVEN cost at which each arm's edge disappears — an edge that dies at
+  # 3 bps is a finding, not a footnote.
+  cost_bps: 5.0
+
+  # Seed for the shuffled-target control. Fixed so the control is reproducible;
+  # if any arm shows skill against these permuted targets the harness is leaking
+  # and every other number in KK3 is void.
+  shuffle_seed: 20260904
+  auc_ceiling: 0.55
+
+  # The window-boundary test: no refit may move Omega by more than this many of
+  # its own trailing standard deviations. Catches a sign flip or a scaler reset
+  # at the harness level, which the KK1 two-window unit test cannot see.
+  boundary_jump_sigma: 8.0
+  boundary_window: 63
+
+  # Non-overlapping sub-periods for the stability table. A result present in
+  # exactly one of these is UNSTABLE, not SUPPORTED (design note section 9).
+  sub_periods:
+    - {name: "2005-2009", start: "2005-01-01", end: "2009-12-31"}
+    - {name: "2010-2014", start: "2010-01-01", end: "2014-12-31"}
+    - {name: "2015-2019", start: "2015-01-01", end: "2019-12-31"}
+    - {name: "2020-2024", start: "2020-01-01", end: "2024-12-31"}
+    - {name: "2025-",     start: "2025-01-01", end: "2100-12-31"}

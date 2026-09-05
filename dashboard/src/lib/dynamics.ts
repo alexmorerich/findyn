@@ -84,6 +84,21 @@ export interface LabSeries {
   format: (v: number) => string;
   /** Diagnostics, surfaced by the debug panel rather than thrown away. */
   diagnostics: SeriesDiagnostics;
+  /**
+   * Milliseconds between consecutive samples beyond which the line **breaks**
+   * instead of bridging.
+   *
+   * Undefined by default, and the four kinematic panels leave it that way: a
+   * price series has no interior holes, so a break would only ever appear at a
+   * market closure and would be noise.
+   *
+   * The research panels set it, because for them a hole is the message. The
+   * KK-Ω coupling is undefined wherever |ΔΩ| fell below its denominator floor
+   * — the estimator declining to publish, not a gap in the market — and a
+   * straight segment drawn across three months of that would assert a value
+   * nobody computed. Same distinction the Lab already draws for `jerk_z`.
+   */
+  maxGap?: number;
 }
 
 export interface SeriesDiagnostics {
@@ -824,9 +839,16 @@ export class DynamicsChart {
       // One string, one attribute write. Building nodes per point is what makes
       // a hand-rolled chart slow; building one path string does not.
       let d = '';
+      const maxGap = series.maxGap;
+      let previous: number | null = null;
       for (let k = 0; k < drawn.length; k++) {
         const s = drawn[k]!;
-        d += `${k === 0 ? 'M' : 'L'}${this.x(s.t).toFixed(1)},${y(s.v).toFixed(1)}`;
+        // `M` rather than `L` after a hole wider than the series tolerates, so
+        // the line breaks instead of asserting a value across it. With `maxGap`
+        // undefined this is exactly the old unconditional `k === 0` test.
+        const broken = maxGap !== undefined && previous !== null && s.t - previous > maxGap;
+        d += `${k === 0 || broken ? 'M' : 'L'}${this.x(s.t).toFixed(1)},${y(s.v).toFixed(1)}`;
+        previous = s.t;
       }
       panel.paths[i]!.setAttribute('d', d);
     });

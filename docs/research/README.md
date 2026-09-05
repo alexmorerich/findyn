@@ -13,37 +13,55 @@ physical fifth dimension. The hypothesis is falsifiable and is allowed to fail.
 
 ## Status
 
-**KK0, KK1 and KK2 delivered.** The design note is pre-registered at
-[`kk-omega-design.md`](./kk-omega-design.md); the `Research is quarantined`
-import-linter contract is green and demonstrated to fail on a planted production
-import. The current in-sample diagnostics are at
+**KK0 through KK4 delivered.** The design note is pre-registered at
+[`kk-omega-design.md`](./kk-omega-design.md); the walk-forward results are at
+[`kk-omega-walkforward.md`](./kk-omega-walkforward.md); the in-sample
+construction diagnostics are at
 [`kk-omega-diagnostics.md`](./kk-omega-diagnostics.md).
 
-Ω, Ω̇, Ω̈, three coupling estimators and the curvature composite `K` are computed
-from the committed fixture:
+### The out-of-sample answer so far
 
-| Quantity | Span on the shipped config | Note |
+258 monthly rebalances, 5,407 out-of-sample rows, 2005-02 → 2026-07. Six arms,
+four horizons, one Benjamini–Hochberg family of 70 p-values.
+
+| Question | Real run | Shuffled control |
 |---|---|---|
-| Ω | 2000-02-03 → 2026-07-30 | 8 columns; `credit_velocity` dropped at 10.9% coverage; PC1 explains 43.7% |
-| `C` (regression) | 2003-02-07 → 2026-07-29 | β1 on Ω̇, Newey–West t = +2.36 on the velocity specification |
-| `K` | 2013-02-11 → 2026-07-29 | five terms, equal weights — **2008 is outside it**, see below |
+| **Q1** forward return | FAILS | FAILS |
+| **Q2** forward volatility | **PASSES (arm B)** | FAILS |
+| **Q3** regime transition | FAILS | FAILS |
+| **Q4** coupling | FAILS | FAILS |
+| **Q5** decision rule | PASSES (arm B, 3/5) | **PASSES — the rule is not a test** |
 
-**Nothing here is a result.** Every number is from a whole-record fit and is
-therefore in-sample. KK3's walk-forward is the only thing that may report one.
+**Ω says nothing about returns and something real about volatility.** Arm B
+(`P,v,a,j` + Ω) beats the RII control arm A′ on forward realized volatility by
+ΔR² of +0.137 / +0.247 / +0.337 at h = 5 / 21 / 63, HAC t of 4.54 / 4.03 / 3.14,
+q of 0.00002 / 0.00018 / 0.00417 — positive in **5 of 5** sub-periods. That is a
+claim about volatility only; §1.2 of the design note is explicit that returns
+and volatility are different claims.
 
-### Two findings KK3 has to carry
+The shuffled-target control clears Q1–Q4 (max |OOS R²| 0.040, smallest q 0.197).
+It also *passes* Q5, which is not a leak — it is a defect in the pre-registered
+Q5 rule, which has no significance test. KK5 must read Q5's PASS as
+uninformative.
 
-1. **No latent quantity is a re-derivation of what the engine publishes.** The
-   largest rank correlation against any published quantity is `K` vs `rii_jerk`
-   at +0.72; `K` vs the RII composite is **+0.42**, well below the 0.9
-   redundancy threshold. That is a statement about redundancy, not usefulness.
-2. **`K` reaches back only to 2013 under the shipped defaults**, because the
-   coupling term warms up twice — 504 observations of expanding regression, then
-   a ten-year expanding z-baseline on top. Shortening
-   `curvature.zscore_min_years` to 5.0 moves the start to 2008-02 and to 3.0
-   moves it to 2006-02. That is a KK3/KK5 decision, deliberately not taken here.
+### The two open items
 
-KK3 is next: the walk-forward comparison of arms A / A′ / B / C / D / E.
+1. **`curvature.zscore_min_years` is still your call.** At the shipped 10.0, `K`
+   covers 2,067 of 5,407 out-of-sample rows and arm E therefore ran without it.
+   At 5.0 `K` would reach 2008.
+2. **Q5's rule needs a significance test** before KK5 can use it. A HAC t-test
+   on arm B's daily excess return over A′ gives t = 0.37, p = 0.71.
+
+### The Lab panels (KK4)
+
+Five synchronized panels — Ω, Ω̇, Ω̈, `C`, `K` — share the existing chart's
+x-axis, zoom and crosshair, behind the build-time flag `PUBLIC_OMEGA_LAB`.
+**Unset by default**: with the flag off the built `/equity` markup is
+byte-identical to the pre-KK4 build and no research code reaches the bundle. The
+data is a committed static artifact at `dashboard/public/research/omega.json`,
+never an API route and never an `engine_output` row.
+
+KK5 is next: the report and the verdict.
 
 ## Structure of the delivered module (target)
 

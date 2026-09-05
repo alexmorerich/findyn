@@ -74,6 +74,13 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # KK4 added the dashboard's first tests, for the two behaviours a type
+      # checker cannot see: a missing research artifact must hide its section
+      # rather than throw, and an undefined coupling value must draw a gap
+      # rather than a line across it. Both fail silently in the browser.
+      - name: Tests
+        run: npm test
+
       - name: Build
         run: npm run build
 
