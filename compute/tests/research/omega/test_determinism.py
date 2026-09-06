@@ -20,6 +20,7 @@ pass on a build where the property does not hold.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -223,3 +224,143 @@ def test_the_curvature_weights_are_stable_across_two_fits(omega_observations, om
     assert first.weights == second.weights
     assert (first.fit_start, first.fit_end) == (second.fit_start, second.fit_end)
     pd.testing.assert_series_equal(first.curvature, second.curvature, check_exact=True)
+
+
+# ---------------------------------------------------------------------------
+# KK6: the environment gate
+# ---------------------------------------------------------------------------
+#
+# The tests above answer "does this fit twice the same way in one process". The
+# three below answer the question that actually bit this repository in issue #6:
+# does it fit the same way under a *different environment*. Each varies one
+# thing that silently changes a floating-point reduction order or a container
+# iteration order, and each would have caught a real defect:
+#
+#   PYTHONHASHSEED   set/dict iteration order. Ω's surviving columns come out of
+#                    an availability check over a frame's columns; if that set
+#                    were ever iterated instead of sorted, the loading vector
+#                    would be permuted and Ω would be a different projection
+#                    under a different seed, with no error anywhere.
+#   OMP_NUM_THREADS  a threaded BLAS reduction sums its partials in whatever
+#                    order the threads finish. `regime/hmm.py` documents the
+#                    ~1e-9 this moved the HMM by, and the estimator pins the
+#                    thread pool for the same reason. If one of these fails the
+#                    fix is `threadpool_limits(1)` around the fit — never a
+#                    tolerance on the assertion.
+
+
+def _subprocess_spec(env_overrides: dict[str, str]) -> str:
+    """Fit Ω in a clean interpreter under ``env_overrides`` and return its JSON."""
+    program = textwrap.dedent(
+        f"""
+        import json
+        import pandas as pd
+        from datetime import date
+        from findynamics.data.accessor import PandasPITAccessor
+        from findynamics.research.omega import OmegaEngine
+
+        frame = pd.read_csv("tests/fixtures/equity_prices.csv")
+        for column in ("obs_date", "release_date", "revision_date"):
+            frame[column] = pd.to_datetime(frame[column])
+
+        engine = OmegaEngine.from_shipped_config()
+        accessor = PandasPITAccessor(frame, date({SNAPSHOT_AS_OF.year},
+                                                 {SNAPSHOT_AS_OF.month},
+                                                 {SNAPSHOT_AS_OF.day}))
+        block = engine.features(accessor)
+        spec = engine.fit(block)
+        omega = engine.transform(block, spec)
+        print(json.dumps({{
+            "spec": spec.as_dict(),
+            "omega": [round(float(v), 15) for v in omega.dropna().to_numpy()[-500:]],
+        }}, sort_keys=True))
+        """
+    )
+    environment = {**os.environ, **env_overrides}
+    result = subprocess.run(
+        [sys.executable, "-c", program],
+        cwd=COMPUTE_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+        env=environment,
+    )
+    return result.stdout
+
+
+@pytest.mark.slow
+def test_omega_is_identical_under_two_hash_seeds():
+    """Catches any set or dict iteration order reaching the projection.
+
+    ``PYTHONHASHSEED`` has to be set in the child's environment before the
+    interpreter starts — setting it inside the process does nothing, which is
+    why this is a subprocess test and not a monkeypatch.
+    """
+    first = _subprocess_spec({"PYTHONHASHSEED": "0"})
+    second = _subprocess_spec({"PYTHONHASHSEED": "12345"})
+
+    assert first == second
+
+
+@pytest.mark.slow
+def test_omega_is_identical_under_one_and_four_openmp_threads():
+    """Catches an unpinned thread pool in the SVD.
+
+    If this fails, the fix is `threadpool_limits(1)` around the fit, exactly as
+    ``engines/equity/regime/hmm.py`` does it. It is **not** to loosen the
+    assertion to a tolerance: artifacts here are compared by content, and
+    "almost the same model" is what cost this repository a monthly job that went
+    red with an unactionable 409.
+    """
+    single = _subprocess_spec({"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"})
+    multiple = _subprocess_spec({"OMP_NUM_THREADS": "4", "OPENBLAS_NUM_THREADS": "4"})
+
+    assert single == multiple
+
+
+@pytest.mark.slow
+def test_the_walk_forward_artifact_is_identical_across_processes(omega_observations):
+    """The whole pipeline, not only Ω: `C`, `K` and every arm's prediction.
+
+    A short window so the test is affordable; the point is the *environment*
+    variation, and a leak of thread-order into the coupling's `np.cumsum` or the
+    curvature's PCA would show up on 2,000 rows as readily as on 5,000.
+    """
+    program = textwrap.dedent(
+        """
+        import copy, json
+        import pandas as pd
+        from findynamics.research.omega import load_omega_config
+        from findynamics.research.omega.config import OmegaConfig
+        from findynamics.research.omega.backtest import walk_forward
+
+        frame = pd.read_csv("tests/fixtures/equity_prices.csv")
+        for column in ("obs_date", "release_date", "revision_date"):
+            frame[column] = pd.to_datetime(frame[column])
+        frame = frame[frame["obs_date"] <= pd.Timestamp(2012, 12, 31)]
+
+        base = load_omega_config()
+        params = copy.deepcopy(base.params)
+        params["walk_forward"] = {**params.get("walk_forward", {}), "cadence_months": 6}
+        config = OmegaConfig(enabled=base.enabled, experimental=base.experimental, params=params)
+
+        result = walk_forward(frame, config)
+        columns = [c for c in ("omega", "coupling", "curvature") if c in result.panel]
+        print(result.panel[columns].to_csv(float_format="%.17g"), end="")
+        print(result.predictions.to_csv(float_format="%.17g"), end="")
+        """
+    )
+
+    def run(env_overrides: dict[str, str]) -> str:
+        return subprocess.run(
+            [sys.executable, "-c", program],
+            cwd=COMPUTE_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**os.environ, **env_overrides},
+        ).stdout
+
+    assert run({"PYTHONHASHSEED": "0", "OMP_NUM_THREADS": "1"}) == run(
+        {"PYTHONHASHSEED": "999", "OMP_NUM_THREADS": "4"}
+    )

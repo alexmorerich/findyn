@@ -11,69 +11,56 @@ used as **guidance for the model's shape** — an observable block, a latent
 coordinate, and a coupling between them. Nothing here claims markets have a
 physical fifth dimension. The hypothesis is falsifiable and is allowed to fail.
 
-## Status
+## Conclusion
 
-**KK0 through KK4 delivered.** The design note is pre-registered at
-[`kk-omega-design.md`](./kk-omega-design.md); the walk-forward results are at
-[`kk-omega-walkforward.md`](./kk-omega-walkforward.md); the in-sample
-construction diagnostics are at
-[`kk-omega-diagnostics.md`](./kk-omega-diagnostics.md).
+**The track is complete. Ω does not carry information about forward returns
+beyond what the equity engine already publishes.**
 
-### The out-of-sample answer so far
+Over 5,407 out-of-sample rows across 258 monthly rebalances, no Ω arm beat the
+RII control arm on forward return at any horizon. One result did survive: arm B —
+price kinematics plus Ω — improves out-of-sample R² on forward realized
+volatility over that control by +0.137 / +0.247 / +0.337 at 5 / 21 / 63 trading
+days, with HAC t-statistics of 4.54 / 4.03 / 3.14, BH-adjusted q-values below
+0.005, positive in five sub-periods of five, and stable under every sensitivity
+including dropping `liquidity_stress` from Ω's own column block. The coupling `C`
+and the curvature `K` did not earn their cost.
 
-258 monthly rebalances, 5,407 out-of-sample rows, 2005-02 → 2026-07. Six arms,
-four horizons, one Benjamini–Hochberg family of 70 p-values.
+The shuffled-target control is clean on Q1–Q4 and found two defects in the
+pre-registration itself: Q3 and Q5 were written without significance tests. The
+pre-registered verdict vocabulary also turns out not to cover this outcome — Q1
+failing with exactly one of Q2/Q3/Q4 passing — so [the
+report](./kk-omega-report.md) reaches **no verdict** rather than choosing the
+nearest label. These are associations measured out of sample; no causal
+relationship is implied, and none was tested.
 
-| Question | Real run | Shuffled control |
-|---|---|---|
-| **Q1** forward return | FAILS | FAILS |
-| **Q2** forward volatility | **PASSES (arm B)** | FAILS |
-| **Q3** regime transition | FAILS | FAILS |
-| **Q4** coupling | FAILS | FAILS |
-| **Q5** decision rule | PASSES (arm B, 3/5) | **PASSES — the rule is not a test** |
+Nothing from this track is reachable from production. It sits above every other
+layer, the `Research is quarantined` import-linter contract forbids `portfolio`,
+`engines`, `factors`, `core` and `data` from importing it, and
+`config/research/omega.yaml` ships `enabled: false`. KK6 verified that the
+equity engine's write-back payload is unchanged across the whole track: the set
+of fields that differ between the first commit and the last is exactly the set
+that differs between two runs of the *same* commit.
 
-**Ω says nothing about returns and something real about volatility.** Arm B
-(`P,v,a,j` + Ω) beats the RII control arm A′ on forward realized volatility by
-ΔR² of +0.137 / +0.247 / +0.337 at h = 5 / 21 / 63, HAC t of 4.54 / 4.03 / 3.14,
-q of 0.00002 / 0.00018 / 0.00417 — positive in **5 of 5** sub-periods. That is a
-claim about volatility only; §1.2 of the design note is explicit that returns
-and volatility are different claims.
+## Documents
 
-The shuffled-target control clears Q1–Q4 (max |OOS R²| 0.040, smallest q 0.197).
-It also *passes* Q5, which is not a leak — it is a defect in the pre-registered
-Q5 rule, which has no significance test. KK5 must read Q5's PASS as
-uninformative.
+| File | Content |
+|---|---|
+| [`kk-omega-design.md`](./kk-omega-design.md) | **The pre-registration.** Hypothesis, the KK mapping table, Ω's inputs, the estimator choice, the sign problem, the anti-lookahead and determinism protocols, the falsification plan (§8), the verdict vocabulary (§9), and what would make us delete the module (§10). Written before any number existed. |
+| [`kk-omega-report.md`](./kk-omega-report.md) | **The result.** §A–H: formulation as implemented, data, the six-arm comparison, performance, predictive statistics, failure analysis with the sensitivity table, the verdict against the quoted rule, and reproduction. Regenerated from committed CSVs by `python -m jobs.omega_research --report`. |
+| [`kk-omega-walkforward.md`](./kk-omega-walkforward.md) | The KK3 walk-forward narrative — what was refit per window, what was frozen, and the three bugs the control surfaced. |
+| [`kk-omega-diagnostics.md`](./kk-omega-diagnostics.md) | The KK2 in-sample construction diagnostics: loadings, coupling panels, curvature decomposition, redundancy against published quantities, stationarity. |
+| [`../follow-ups/kk-omega.md`](../follow-ups/kk-omega.md) | What to delete, and the cheapest experiment that would most change the conclusion. Post-hoc by construction. |
 
-### The two open items
-
-1. **`curvature.zscore_min_years` is still your call.** At the shipped 10.0, `K`
-   covers 2,067 of 5,407 out-of-sample rows and arm E therefore ran without it.
-   At 5.0 `K` would reach 2008.
-2. **Q5's rule needs a significance test** before KK5 can use it. A HAC t-test
-   on arm B's daily excess return over A′ gives t = 0.37, p = 0.71.
-
-### The Lab panels (KK4)
-
-Five synchronized panels — Ω, Ω̇, Ω̈, `C`, `K` — share the existing chart's
-x-axis, zoom and crosshair, behind the build-time flag `PUBLIC_OMEGA_LAB`.
-**Unset by default**: with the flag off the built `/equity` markup is
-byte-identical to the pre-KK4 build and no research code reaches the bundle. The
-data is a committed static artifact at `dashboard/public/research/omega.json`,
-never an API route and never an `engine_output` row.
-
-KK5 is next: the report and the verdict.
-
-## Structure of the delivered module (target)
+## Where the code lives
 
 | Path | Content |
 |---|---|
-| `compute/findynamics/research/omega/` | The module. A new top layer, **not** a sixth engine. |
-| `compute/config/research/omega.yaml` | Flag (`enabled: false`) and every parameter |
-| `compute/tests/research/omega/` | Unit, leakage, determinism, quarantine tests |
-| `compute/jobs/omega_research.py` | Deliberate-run research job. No cron. |
-| `compute/backtests/omega/` | Walk-forward CSV artifacts |
-| `docs/research/kk-omega-design.md` | The pre-registered design + falsification plan (KK0) |
-| `docs/research/kk-omega-report.md` | The empirical result and verdict (KK5) |
+| `compute/findynamics/research/omega/` | The module. A top layer, **not** a sixth engine. |
+| `compute/config/research/omega.yaml` | `enabled: false` and every parameter |
+| `compute/tests/research/omega/` | 250 tests: unit, leakage, determinism, quarantine, language |
+| `compute/jobs/omega_research.py` | Deliberate-run job. No cron, no `[project.scripts]` entry. |
+| `compute/backtests/omega/` | Walk-forward CSV artifacts; every number in the report traces to one |
+| `dashboard/public/research/omega.json` | The Lab artifact, behind `PUBLIC_OMEGA_LAB` |
 
 ## Prompts (execution order)
 

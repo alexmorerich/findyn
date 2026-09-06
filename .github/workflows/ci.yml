@@ -99,7 +99,7 @@ jobs:
           cache: pip
           cache-dependency-path: compute/pyproject.toml
 
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev,research]"
 
       - name: Lint
         run: ruff check .

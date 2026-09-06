@@ -337,6 +337,21 @@ keep it out of anything that matters: `enabled: false` in
 that forbids `portfolio`, `factors`, `core` and `data` from importing it at all.
 `findynamics/engines/crypto/engine.py` opens with the reasoning behind each.
 
+**The KK-Ω research track is complete and its verdict is negative on the question
+it set out to answer.** A fifth-dimensional latent-state representation inspired
+by Kaluza-Klein geometry was tested as a quantitative modelling hypothesis over
+5,407 out-of-sample rows: the latent coordinate Ω carries **no** information
+about forward returns beyond the instability index `engines/equity/rii.py`
+already publishes. It does carry information about forward realized volatility
+beyond it, at three horizons and in five sub-periods of five. The coupling and
+the curvature did not earn their cost. The pre-registered verdict vocabulary
+turns out not to cover this outcome and the report says so rather than choosing
+the nearest label. Nothing from that track is reachable from production: it lives
+above every other layer, an `import-linter` contract forbids `portfolio`,
+`engines`, `factors`, `core` and `data` from importing it, and
+`config/research/omega.yaml` ships `enabled: false`. See
+[`docs/research/`](docs/research/).
+
 | M | Deliverable | Acceptance | Status |
 |---|---|---|---|
 | M0 | Repo scaffold, wrangler config, D1 migrations, CI | Deployable bundle validates; migrations apply; CI green | ✅ **Done** |
