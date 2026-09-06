@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "FinDyn v1.0 dashboard — static Astro site over the public read-only API (see FINDYN_V1_SPEC.md §16)",
+  "description": "FinDyn v1.0 dashboard \u2014 static Astro site over the public read-only API (see FINDYN_V1_SPEC.md \u00a716)",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build",
+    "build": "astro build && node scripts/copy-research-artifact.mjs",
     "preview": "astro preview",
     "typecheck": "astro check && tsc --noEmit",
     "test": "vitest run"

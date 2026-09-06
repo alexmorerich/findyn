@@ -4,7 +4,7 @@
 ``engine_output`` table and ``EngineOutput.asset`` is validated against
 ``ASSETS``, so publishing Ω through that path would write research rows into a
 production table. This module writes a single static artifact to
-``dashboard/public/research/omega.json`` instead: no migration, no route, no
+``dashboard/research/omega.json`` instead: no migration, no route, no
 ``serving/`` change, and nothing the daily job can reach.
 
 The artifact carries its own ``disclaimer`` field. A JSON file that outlives the

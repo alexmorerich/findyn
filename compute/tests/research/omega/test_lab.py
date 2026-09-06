@@ -129,16 +129,15 @@ def test_the_artifact_carries_its_schema_and_regenerates_byte_identically(
 
 
 def test_the_committed_artifact_matches_the_schema_the_dashboard_expects():
-    """The file in ``dashboard/public/research/`` is a contract with the Lab."""
+    """The file in ``dashboard/research/`` is a contract with the Lab.
+
+    Outside ``public/`` deliberately: Astro copies that directory into every
+    build, so an artifact kept there would ship on production pages where the
+    Lab is compiled out.
+    """
     from pathlib import Path
 
-    path = (
-        Path(__file__).resolve().parents[3].parent
-        / "dashboard"
-        / "public"
-        / "research"
-        / "omega.json"
-    )
+    path = Path(__file__).resolve().parents[3].parent / "dashboard" / "research" / "omega.json"
     if not path.exists():
         pytest.skip("lab artifact not generated in this working tree")
 

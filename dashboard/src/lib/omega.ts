@@ -8,6 +8,13 @@
  * `public/research/omega.json` instead and the Lab reads it directly: no
  * migration, no route, no `serving/` change.
  *
+ * It lives in `dashboard/research/`, **not** `dashboard/public/`. Astro copies
+ * `public/` wholesale, so an artifact kept there is published by every build —
+ * including a production build with `PUBLIC_OMEGA_LAB` unset and every panel
+ * below compiled out, where it was 672 KB of JSON fetched by nothing.
+ * `scripts/copy-research-artifact.mjs` copies it into `dist/` after the build
+ * and only when the flag is set.
+ *
  * Three consequences the loader is built around:
  *
  * - **A missing file is normal.** A clone that has not run

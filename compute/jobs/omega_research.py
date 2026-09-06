@@ -48,9 +48,12 @@ DEFAULT_REPORT = Path(__file__).resolve().parents[2] / "docs" / "research" / "kk
 #: The Lab reads this file directly from the static site. It is a committed
 #: research artifact and deliberately not an API response — see
 #: ``findynamics/research/omega/lab.py`` for why that distinction is load-bearing.
-DEFAULT_LAB_JSON = (
-    Path(__file__).resolve().parents[2] / "dashboard" / "public" / "research" / "omega.json"
-)
+#:
+#: Outside ``dashboard/public/`` on purpose: Astro copies that directory into
+#: every build, so an artifact kept there ships on production pages where the
+#: Lab is compiled out. ``dashboard/scripts/copy-research-artifact.mjs`` puts
+#: it into ``dist/`` only when ``PUBLIC_OMEGA_LAB`` is set.
+DEFAULT_LAB_JSON = Path(__file__).resolve().parents[2] / "dashboard" / "research" / "omega.json"
 
 BANNER = """
 ================================================================================
