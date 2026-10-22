@@ -8,6 +8,22 @@ import { ASSETS, FORCES, HORIZONS, PROFILES } from '../domain';
  * door its results come through. Everything is upserted so a re-run of the same
  * job is idempotent — reruns after a partial failure are routine, and duplicate
  * rows would quietly corrupt point-in-time reads.
+ *
+ * Every upsert's DO UPDATE is guarded by a WHERE that compares the payload
+ * columns against the stored row, because idempotent is not the same as free.
+ * Each engine republishes a multi-year window nightly (`history_days`), so a
+ * normal run offers ~125k rows of which a handful are new — and an unguarded
+ * DO UPDATE rewrites the row, and its index entries, even when every value is
+ * identical. D1 bills those as rows written: the nightly republish alone
+ * exceeded the 100k/day free-tier write limit and the database started
+ * returning errors on every write. With the guard, an unchanged row costs one
+ * indexed read instead of a write (reads are capped 50x higher), so the window
+ * stays long and the bill tracks what actually changed.
+ *
+ * Consequence to know about: `written_at` / `computed_at` / `ingested_at` now
+ * mean "when this value last changed", not "when it was last offered". Nothing
+ * reads them as a liveness signal — /health uses `ingestion_log.run_at`, which
+ * is append-only, and staleness in /api is measured from `as_of`.
  */
 
 /** D1 free tier caps a batch at 1000 statements. */
@@ -526,7 +542,15 @@ export async function applyWriteBack(
        seasonal_adjustment = excluded.seasonal_adjustment,
        first_observation = excluded.first_observation,
        last_observation = excluded.last_observation,
-       notes = excluded.notes, updated_at = excluded.updated_at`,
+       notes = excluded.notes, updated_at = excluded.updated_at
+     WHERE series_metadata.provider IS NOT excluded.provider
+        OR series_metadata.title IS NOT excluded.title
+        OR series_metadata.frequency IS NOT excluded.frequency
+        OR series_metadata.unit IS NOT excluded.unit
+        OR series_metadata.seasonal_adjustment IS NOT excluded.seasonal_adjustment
+        OR series_metadata.first_observation IS NOT excluded.first_observation
+        OR series_metadata.last_observation IS NOT excluded.last_observation
+        OR series_metadata.notes IS NOT excluded.notes`,
   );
 
   // Keyed on the vintage, so re-ingesting a series updates each figure in place
@@ -539,14 +563,20 @@ export async function applyWriteBack(
      ON CONFLICT(series_id, obs_date, revision_date) DO UPDATE SET
        release_date = excluded.release_date, value = excluded.value,
        vintage = excluded.vintage, ingested_at = excluded.ingested_at,
-       quality_flag = excluded.quality_flag`,
+       quality_flag = excluded.quality_flag
+     WHERE macro_series.value IS NOT excluded.value
+        OR macro_series.release_date IS NOT excluded.release_date
+        OR macro_series.vintage IS NOT excluded.vintage
+        OR macro_series.quality_flag IS NOT excluded.quality_flag`,
   );
 
   const priceStmt = db.prepare(
     `INSERT INTO market_price (date, symbol, close, volume, source, ingested_at)
      VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(date, symbol, source) DO UPDATE SET
-       close = excluded.close, volume = excluded.volume, ingested_at = excluded.ingested_at`,
+       close = excluded.close, volume = excluded.volume, ingested_at = excluded.ingested_at
+     WHERE market_price.close IS NOT excluded.close
+        OR market_price.volume IS NOT excluded.volume`,
   );
 
   const dqStmt = db.prepare(
@@ -564,7 +594,9 @@ export async function applyWriteBack(
     `INSERT INTO force_scores (date, force, score, components, model_version)
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(date, force, model_version) DO UPDATE SET
-       score = excluded.score, components = excluded.components`,
+       score = excluded.score, components = excluded.components
+     WHERE force_scores.score IS NOT excluded.score
+        OR force_scores.components IS NOT excluded.components`,
   );
 
   // Keyed on (asset, as_of, model_version), so re-running a day replaces that
@@ -578,28 +610,38 @@ export async function applyWriteBack(
        regime = excluded.regime, expected_return = excluded.expected_return,
        risk_score = excluded.risk_score, confidence = excluded.confidence,
        signals = excluded.signals, components = excluded.components,
-       written_at = excluded.written_at`,
+       written_at = excluded.written_at
+     WHERE asset_state.regime IS NOT excluded.regime
+        OR asset_state.expected_return IS NOT excluded.expected_return
+        OR asset_state.risk_score IS NOT excluded.risk_score
+        OR asset_state.confidence IS NOT excluded.confidence
+        OR asset_state.signals IS NOT excluded.signals
+        OR asset_state.components IS NOT excluded.components`,
   );
 
   const outputStmt = db.prepare(
     `INSERT INTO engine_output (asset, metric, as_of, value, meta, written_at)
      VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(asset, metric, as_of) DO UPDATE SET
-       value = excluded.value, meta = excluded.meta, written_at = excluded.written_at`,
+       value = excluded.value, meta = excluded.meta, written_at = excluded.written_at
+     WHERE engine_output.value IS NOT excluded.value
+        OR engine_output.meta IS NOT excluded.meta`,
   );
 
   const featureStmt = db.prepare(
     `INSERT INTO derived_features (asset, date, feature, value, model_version, computed_at)
      VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(asset, date, feature, model_version) DO UPDATE SET
-       value = excluded.value, computed_at = excluded.computed_at`,
+       value = excluded.value, computed_at = excluded.computed_at
+     WHERE derived_features.value IS NOT excluded.value`,
   );
 
   const regimeStmt = db.prepare(
     `INSERT INTO regime_state (asset, date, regime, probability, model_version)
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(asset, date, regime, model_version) DO UPDATE SET
-       probability = excluded.probability`,
+       probability = excluded.probability
+     WHERE regime_state.probability IS NOT excluded.probability`,
   );
 
   const forecastStmt = db.prepare(
@@ -607,7 +649,9 @@ export async function applyWriteBack(
        (as_of, horizon, quantile, value, educational_only, model_version, asset)
      VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(asset, as_of, horizon, quantile, model_version) DO UPDATE SET
-       value = excluded.value, educational_only = excluded.educational_only`,
+       value = excluded.value, educational_only = excluded.educational_only
+     WHERE forecast_distribution.value IS NOT excluded.value
+        OR forecast_distribution.educational_only IS NOT excluded.educational_only`,
   );
 
   // Keyed on (profile, as_of, model_version): a re-run replaces that profile's
@@ -618,7 +662,10 @@ export async function applyWriteBack(
      VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(profile, as_of, model_version) DO UPDATE SET
        weights = excluded.weights, implication = excluded.implication,
-       degraded = excluded.degraded, written_at = excluded.written_at`,
+       degraded = excluded.degraded, written_at = excluded.written_at
+     WHERE portfolio_state.weights IS NOT excluded.weights
+        OR portfolio_state.implication IS NOT excluded.implication
+        OR portfolio_state.degraded IS NOT excluded.degraded`,
   );
 
   const result: WriteBackResult = {
